@@ -1,0 +1,15 @@
+{{- if and .Values.rbac.create (not .Values.rbac.clusterWide) -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "fluxcd-helm-upgrader.fullname" . }}
+  labels:
+    {{- include "fluxcd-helm-upgrader.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["helm.toolkit.fluxcd.io"]
+    resources: ["helmreleases"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["source.toolkit.fluxcd.io"]
+    resources: ["helmcharts", "helmrepositories"]
+    verbs: ["get", "list", "watch"]
+{{- end }}

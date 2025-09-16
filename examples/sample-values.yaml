@@ -1,0 +1,14 @@
+image:
+  repository: ghcr.io/kenchrcum/fluxcd-helm-upgrader
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+rbac:
+  create: true
+  clusterWide: true
+
+logLevel: INFO
+intervalSeconds: 300
+includePrerelease: false

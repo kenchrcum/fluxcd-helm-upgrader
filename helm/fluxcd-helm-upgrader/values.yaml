@@ -1,0 +1,34 @@
+image:
+  repository: ghcr.io/kenchrcum/fluxcd-helm-upgrader
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+serviceAccount:
+  create: true
+  name: ""
+
+rbac:
+  create: true
+  clusterWide: true
+
+logLevel: INFO
+intervalSeconds: 300
+includePrerelease: false
+
+podAnnotations: {}
