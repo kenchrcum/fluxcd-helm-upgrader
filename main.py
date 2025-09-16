@@ -5,7 +5,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 import yaml
-from packaging.version import Version, InvalidVersion
+import semver
+import re
 from kubernetes import client, config
 from kubernetes.client import ApiException
 
@@ -150,34 +151,45 @@ def get_current_chart_name_and_version(hr: Dict[str, Any]) -> Tuple[Optional[str
 
     desired_version = chart_spec.get("version") or None
 
-    # Applied revision is typically the version; sometimes includes chart name (e.g. mychart-1.2.3)
+    # Applied revision is typically the version; sometimes includes chart name (e.g. mychart-1.2.3 or mychart-1.2.3-rc.1)
+    current_version: Optional[str]
     if applied:
-        if "-" in applied and not applied[0].isdigit():
-            # split trailing version from 'name-version'
-            parts = applied.rsplit("-", 1)
-            if len(parts) == 2:
-                if not chart_name:
-                    chart_name = parts[0]
-                current_version = parts[1]
-            else:
-                current_version = applied
-        else:
+        # 1) If applied is already a version string, accept it
+        if parse_version(applied):
             current_version = applied
+        # 2) If we know chart_name and applied starts with "{chart_name}-", take the suffix
+        elif chart_name and applied.startswith(f"{chart_name}-"):
+            candidate = applied[len(chart_name) + 1 :]
+            current_version = candidate if parse_version(candidate) else None
+        else:
+            # 3) Try to extract a trailing semver (with optional leading 'v')
+            m = re.search(r'(?:^|-)v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z\.-]+)?(?:\+[0-9A-Za-z\.-]+)?)$', applied)
+            if m:
+                candidate = m.group(1)
+                current_version = candidate if parse_version(candidate) else None
+                if not chart_name:
+                    # Trim trailing '-' if present before the version
+                    prefix = applied[: m.start(1)]
+                    if prefix.endswith('-'):
+                        prefix = prefix[:-1]
+                    chart_name = prefix or chart_name
+            else:
+                current_version = None
     else:
         current_version = desired_version
 
     return chart_name, current_version
 
 
-def parse_version(text: Optional[str]) -> Optional[Version]:
+def parse_version(text: Optional[str]) -> Optional[semver.VersionInfo]:
     if not text:
         return None
     raw = text.strip()
     if raw.startswith("v"):
         raw = raw[1:]
     try:
-        return Version(raw)
-    except InvalidVersion:
+        return semver.VersionInfo.parse(raw)
+    except ValueError:
         return None
 
 
@@ -209,7 +221,7 @@ def latest_available_version(
 ) -> Optional[str]:
     entries = (index or {}).get("entries") or {}
     chart_entries = entries.get(chart_name) or []
-    best: Optional[Tuple[Version, str]] = None
+    best: Optional[Tuple[semver.VersionInfo, str]] = None
     for entry in chart_entries:
         ver_text = entry.get("version")
         if not ver_text:
@@ -219,7 +231,7 @@ def latest_available_version(
         ver = parse_version(ver_text)
         if not ver:
             continue
-        if (not include_prerelease) and ver.is_prerelease:
+        if (not include_prerelease) and (ver.prerelease is not None):
             continue
         if (best is None) or (ver > best[0]):
             best = (ver, ver_text)
