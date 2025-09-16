@@ -20,6 +20,10 @@ SOURCE_VERSIONS = ["v1", "v1beta2", "v1beta1"]
 DEFAULT_INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", "300"))
 INCLUDE_PRERELEASE = os.getenv("INCLUDE_PRERELEASE", "false").lower() in ("1", "true", "yes", "on")
 REQUEST_TIMEOUT = (5, 20)  # connect, read
+DEFAULT_HEADERS = {
+    "User-Agent": "fluxcd-helm-upgrader/0.1 (+https://github.com/kenchrcum/fluxcd-helm-upgrader)",
+    "Accept": "application/x-yaml, text/yaml, text/plain;q=0.9, */*;q=0.8",
+}
 
 
 def configure_logging() -> None:
@@ -208,9 +212,42 @@ def fetch_repo_index(repo: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not index_url:
         return None
     try:
-        resp = requests.get(index_url, timeout=REQUEST_TIMEOUT)
+        resp = requests.get(index_url, timeout=REQUEST_TIMEOUT, headers=DEFAULT_HEADERS)
         resp.raise_for_status()
-        return yaml.safe_load(resp.text)
+        # First attempt: use text as-is (requests decodes if Content-Encoding: gzip)
+        try:
+            return yaml.safe_load(resp.text)
+        except Exception:
+            # Fallbacks for servers serving gzipped content as application/gzip (no Content-Encoding)
+            ct = (resp.headers.get("Content-Type") or "").lower()
+            content = resp.content or b""
+            if content[:2] == b"\x1f\x8b" or "application/gzip" in ct or "application/x-gzip" in ct:
+                import gzip
+
+                try:
+                    decompressed = gzip.decompress(content)
+                    text = decompressed.decode("utf-8", errors="replace")
+                    return yaml.safe_load(text)
+                except Exception:
+                    logging.exception(
+                        "Failed to decompress and parse gzipped index from %s (content-type=%s, length=%s)",
+                        index_url,
+                        ct,
+                        len(content),
+                    )
+                    return None
+            # Final fallback: try utf-8-sig decode in case of BOM or odd encodings
+            try:
+                text = content.decode("utf-8-sig", errors="strict")
+                return yaml.safe_load(text)
+            except Exception:
+                logging.exception(
+                    "Failed parsing repo index from %s (content-type=%s, length=%s)",
+                    index_url,
+                    ct,
+                    len(content),
+                )
+                return None
     except Exception:
         logging.exception("Failed fetching repo index from %s", index_url)
         return None
