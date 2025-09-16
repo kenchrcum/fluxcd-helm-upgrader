@@ -1,6 +1,9 @@
 import os
 import time
 import logging
+import subprocess
+import glob
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -25,6 +28,16 @@ DEFAULT_HEADERS = {
     "Accept": "application/x-yaml, text/yaml, text/plain;q=0.9, */*;q=0.8",
 }
 
+# Git repository configuration for locating HelmRelease manifests
+REPO_URL = os.getenv("REPO_URL", "").strip()
+REPO_BRANCH = os.getenv("REPO_BRANCH", "").strip()
+REPO_SEARCH_PATTERN = os.getenv(
+    "REPO_SEARCH_PATTERN",
+    "/components/{namespace}/helmrelease*.y*ml",
+).strip()
+REPO_CLONE_DIR = os.getenv("REPO_CLONE_DIR", "/tmp/fluxcd-repo").strip()
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
+
 
 def configure_logging() -> None:
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -42,6 +55,112 @@ def load_kube_config() -> client.CustomObjectsApi:
         config.load_kube_config()
         logging.info("Loaded kubeconfig from local environment")
     return client.CustomObjectsApi()
+
+
+def _run_git_command(args: List[str], cwd: Optional[str] = None) -> Tuple[int, str, str]:
+    env = os.environ.copy()
+    base_cmd = ["git"]
+    if GITHUB_TOKEN:
+        base_cmd += ["-c", f"http.extraHeader=Authorization: Bearer {GITHUB_TOKEN}"]
+    full_cmd = base_cmd + args
+    proc = subprocess.run(
+        full_cmd,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def ensure_repo_cloned_or_updated() -> Optional[str]:
+    if not REPO_URL:
+        return None
+    clone_dir_path = Path(REPO_CLONE_DIR)
+    try:
+        if not clone_dir_path.exists():
+            clone_dir_path.mkdir(parents=True, exist_ok=True)
+            clone_args: List[str] = ["clone", "--depth", "1"]
+            if REPO_BRANCH:
+                clone_args += ["--branch", REPO_BRANCH, "--single-branch"]
+            clone_args += [REPO_URL, str(clone_dir_path)]
+            code, out, err = _run_git_command(clone_args)
+            if code != 0:
+                logging.error("Failed to clone repo: %s", err.strip())
+                return None
+            logging.info("Cloned repository into %s", clone_dir_path)
+        else:
+            # If already a git repo, fetch and reset to origin/branch
+            git_dir = clone_dir_path / ".git"
+            if not git_dir.exists():
+                logging.warning("Clone dir exists but is not a git repo: %s", clone_dir_path)
+                return str(clone_dir_path)
+            # Fetch
+            code, out, err = _run_git_command(["fetch", "--all", "--prune"], cwd=str(clone_dir_path))
+            if code != 0:
+                logging.error("Failed to fetch repo updates: %s", err.strip())
+                return str(clone_dir_path)
+            # Determine branch to reset to
+            branch = REPO_BRANCH
+            if not branch:
+                code, out, err = _run_git_command(["rev-parse", "--abbrev-ref", "origin/HEAD"], cwd=str(clone_dir_path))
+                if code == 0 and out.strip().startswith("origin/"):
+                    branch = out.strip().split("/", 1)[1]
+                else:
+                    branch = "main"
+            # Reset hard to remote branch
+            code, out, err = _run_git_command(["reset", "--hard", f"origin/{branch}"], cwd=str(clone_dir_path))
+            if code != 0:
+                logging.error("Failed to reset repo to origin/%s: %s", branch, err.strip())
+            _run_git_command(["clean", "-fdx"], cwd=str(clone_dir_path))
+    except Exception:
+        logging.exception("Failed preparing repository at %s", clone_dir_path)
+        return None
+    return str(clone_dir_path)
+
+
+def resolve_manifest_path_for_release(repo_dir: str, namespace: str, name: str) -> Optional[str]:
+    try:
+        # Allow multiple patterns separated by ';'
+        patterns = [p for p in REPO_SEARCH_PATTERN.split(";") if p.strip()]
+        if not patterns:
+            patterns = ["**/helmrelease*.y*ml"]
+        repo_root = Path(repo_dir)
+        for pattern in patterns:
+            try:
+                substituted = pattern.format(namespace=namespace, name=name)
+            except Exception:
+                substituted = pattern
+            substituted = substituted.lstrip("/")
+            for path in glob.glob(str(repo_root / substituted), recursive=True):
+                p = Path(path)
+                if not p.is_file():
+                    continue
+                try:
+                    content = p.read_text(encoding="utf-8")
+                except Exception:
+                    continue
+                try:
+                    for doc in yaml.safe_load_all(content):
+                        if not isinstance(doc, dict):
+                            continue
+                        if str(doc.get("kind")) != "HelmRelease":
+                            continue
+                        metadata = doc.get("metadata") or {}
+                        if metadata.get("name") != name:
+                            continue
+                        # If namespace is present in file, ensure it matches; otherwise accept
+                        file_ns = metadata.get("namespace")
+                        if file_ns and file_ns != namespace:
+                            continue
+                        return str(p.relative_to(repo_root))
+                except Exception:
+                    # Ignore YAML parse errors for non-HelmRelease files
+                    continue
+        return None
+    except Exception:
+        logging.exception("Error searching for HelmRelease manifest for %s/%s", namespace, name)
+        return None
 
 
 def list_helm_releases(coapi: client.CustomObjectsApi) -> Tuple[List[Dict[str, Any]], Optional[str]]:
@@ -330,6 +449,21 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                 latest_text,
                 current_version_text,
             )
+            # If repo is configured, try to locate the HelmRelease manifest path so we know what file to update later
+            if REPO_URL:
+                repo_dir = ensure_repo_cloned_or_updated()
+                if repo_dir:
+                    manifest_rel_path = resolve_manifest_path_for_release(repo_dir, hr_ns, hr_name)
+                    if manifest_rel_path:
+                        logging.info(
+                            "Manifest path: %s (repo root)",
+                            manifest_rel_path,
+                        )
+                    else:
+                        logging.info(
+                            "Manifest path not found using pattern '%s'",
+                            REPO_SEARCH_PATTERN,
+                        )
         else:
             logging.debug(
                 "%s/%s: up-to-date (chart %s current %s, latest %s)",

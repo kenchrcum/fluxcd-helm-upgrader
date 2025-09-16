@@ -31,6 +31,21 @@ spec:
               value: {{ .Values.intervalSeconds | quote }}
             - name: INCLUDE_PRERELEASE
               value: {{ .Values.includePrerelease | quote }}
+            - name: REPO_URL
+              value: {{ .Values.repo.url | quote }}
+            - name: REPO_BRANCH
+              value: {{ .Values.repo.branch | quote }}
+            - name: REPO_SEARCH_PATTERN
+              value: {{ .Values.repo.searchPattern | quote }}
+            - name: REPO_CLONE_DIR
+              value: {{ .Values.repo.cloneDir | quote }}
+            {{- if and .Values.repo.githubTokenSecret.enabled .Values.repo.githubTokenSecret.name }}
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.repo.githubTokenSecret.name }}
+                  key: {{ default "token" .Values.repo.githubTokenSecret.key | quote }}
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       nodeSelector:

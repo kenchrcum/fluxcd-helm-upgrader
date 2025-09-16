@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # Install runtime deps for kubernetes client (openssh for git if needed later)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl && \
+    ca-certificates curl git && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

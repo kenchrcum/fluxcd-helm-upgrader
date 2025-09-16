@@ -15,6 +15,11 @@ Environment variables:
 - `LOG_LEVEL` (default `INFO`)
 - `INTERVAL_SECONDS` (default `300`)
 - `INCLUDE_PRERELEASE` (default `false`)
+ - `REPO_URL` (Flux repo to scan, e.g. `https://github.com/org/flux-infra.git`)
+ - `REPO_BRANCH` (optional branch, default repo default)
+ - `REPO_SEARCH_PATTERN` (glob with placeholders; default `/components/{namespace}/helmrelease*.y*ml`)
+ - `REPO_CLONE_DIR` (default `/tmp/fluxcd-repo`)
+ - `GITHUB_TOKEN` (optional; token for private GitHub repos)
 
 ## Build
 ```bash
@@ -42,6 +47,20 @@ kubectl apply -f k8s/rbac.yaml
 kubectl apply -f k8s/deployment.yaml
 ```
 
+### Helm values for repo configuration
+```yaml
+repo:
+  url: https://github.com/your-org/flux-infra.git
+  branch: main
+  searchPattern: "/components/{namespace}/helmrelease*.y*ml"
+  cloneDir: /tmp/fluxcd-repo
+  githubTokenSecret:
+    enabled: true
+    name: fluxcd-helm-upgrader-github
+    key: token
+```
+
 ## Notes
 - OCI HelmRepository types are currently skipped.
 - Creating PRs/merges to bump versions is out of scope for now, but the code is structured to extend later.
+ - When an update is detected and `repo.url` is configured, the app logs the relative manifest path to change (under repo root) based on `repo.searchPattern`.

@@ -32,3 +32,17 @@ intervalSeconds: 300
 includePrerelease: false
 
 podAnnotations: {}
+
+# Git repository configuration to locate HelmRelease manifests in Flux repo
+repo:
+  url: ""
+  branch: ""
+  # Pattern supports placeholders: {namespace}, {name}
+  searchPattern: "/components/{namespace}/helmrelease*.y*ml"
+  # Optional: mount path inside container where repo will be cloned
+  cloneDir: "/tmp/fluxcd-repo"
+  # Optional: GitHub token for private repos (use Kubernetes secret)
+  githubTokenSecret:
+    enabled: false
+    name: ""
+    key: token
