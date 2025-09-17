@@ -56,6 +56,69 @@ SSH_KNOWN_HOSTS_PATH = os.getenv(
 ).strip()
 
 
+def validate_ssh_key_loading(private_key_path: str) -> bool:
+    """Test if SSH private key can be loaded by ssh-keygen."""
+    try:
+        # First check if ssh-keygen is available
+        check_ssh_keygen = subprocess.run(
+            ["which", "ssh-keygen"],
+            capture_output=True,
+            text=True,
+        )
+        if check_ssh_keygen.returncode != 0:
+            logging.warning("ssh-keygen not found, skipping key validation")
+            return True
+
+        # Check file permissions and existence
+        if not os.path.exists(private_key_path):
+            logging.error("SSH private key file does not exist: %s", private_key_path)
+            return False
+
+        # Check if file is readable
+        try:
+            with open(private_key_path, 'r') as f:
+                content = f.read()
+                if not content.strip():
+                    logging.error("SSH private key file is empty: %s", private_key_path)
+                    return False
+        except PermissionError:
+            logging.error("Cannot read SSH private key file (permission denied): %s", private_key_path)
+            return False
+        except Exception as e:
+            logging.error("Error reading SSH private key file: %s", str(e))
+            return False
+
+        # Try to validate with ssh-keygen
+        result = subprocess.run(
+            ["ssh-keygen", "-l", "-f", private_key_path],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        if result.returncode == 0:
+            logging.debug("SSH key loading validation passed")
+            return True
+        else:
+            stderr_msg = result.stderr.strip()
+            logging.warning("SSH key validation warning: %s", stderr_msg)
+
+            # If it's just a warning about not being able to print key, but the command succeeded partially, continue
+            if "not a key file" not in stderr_msg.lower():
+                logging.info("SSH key validation passed despite warnings")
+                return True
+            else:
+                logging.error("SSH key loading failed: %s", stderr_msg)
+                return False
+
+    except FileNotFoundError:
+        logging.warning("ssh-keygen not found, skipping key validation")
+        return True
+    except Exception as e:
+        logging.error("Error testing SSH key loading: %s", str(e))
+        return False
+
+
 def setup_ssh_config() -> bool:
     """Setup SSH configuration for git operations."""
     try:
@@ -80,6 +143,52 @@ def setup_ssh_config() -> bool:
             logging.error(
                 "Make sure the SSH private key file exists and the path is correct"
             )
+            return False
+
+        # Validate SSH private key format
+        try:
+            with open(private_key_path, 'r') as f:
+                key_content = f.read().strip()
+                if not key_content:
+                    logging.error("SSH private key file is empty")
+                    return False
+
+                # Check if it's a valid SSH private key format
+                if not (key_content.startswith('-----BEGIN OPENSSH PRIVATE KEY-----') or
+                        key_content.startswith('-----BEGIN RSA PRIVATE KEY-----') or
+                        key_content.startswith('-----BEGIN EC PRIVATE KEY-----') or
+                        key_content.startswith('-----BEGIN PRIVATE KEY-----')):
+                    logging.error("SSH private key is not in a recognized format")
+                    logging.error("Supported formats: OpenSSH, RSA, ECDSA, or PKCS#8")
+                    logging.error("You may need to convert your key using: ssh-keygen -p -f key_file -m pem")
+                    return False
+
+                if not (key_content.endswith('-----END OPENSSH PRIVATE KEY-----\n') or
+                        key_content.endswith('-----END RSA PRIVATE KEY-----\n') or
+                        key_content.endswith('-----END EC PRIVATE KEY-----\n') or
+                        key_content.endswith('-----END PRIVATE KEY-----\n') or
+                        key_content.endswith('-----END OPENSSH PRIVATE KEY-----') or
+                        key_content.endswith('-----END RSA PRIVATE KEY-----') or
+                        key_content.endswith('-----END EC PRIVATE KEY-----') or
+                        key_content.endswith('-----END PRIVATE KEY-----')):
+                    logging.warning("SSH private key may be missing trailing newline")
+                    logging.warning("This can cause SSH authentication to fail")
+                    logging.info("Consider adding a newline at the end of your SSH key in Vault")
+
+                # Check for missing trailing newline (common Vault issue)
+                if not key_content.endswith('\n'):
+                    logging.warning("SSH private key is missing trailing newline")
+                    logging.warning("This is a common issue when storing SSH keys in secret management systems")
+                    logging.info("Add '\\n' to the end of your SSH key value in Vault")
+
+            logging.debug("SSH private key format validation passed")
+
+        except Exception as e:
+            logging.error("Error validating SSH private key format: %s", str(e))
+            return False
+
+        # Test if SSH key can be loaded by ssh-keygen
+        if not validate_ssh_key_loading(str(private_key_path)):
             return False
 
         # Set proper permissions on private key (if writable)
@@ -164,7 +273,23 @@ def validate_ssh_access(repo_url: str) -> bool:
             logging.debug("SSH access validated")
             return True
         else:
-            logging.error("SSH access validation failed: %s", result.stderr.strip())
+            stderr_output = result.stderr.strip()
+            logging.error("SSH access validation failed: %s", stderr_output)
+
+            # Provide specific guidance based on error type
+            if "Load key" in stderr_output and "error in libcrypto" in stderr_output:
+                logging.error("SSH key format issue detected. Common solutions:")
+                logging.error("1. Convert PKCS#8 format to PEM: openssl rsa -in key.pem -out key.pem")
+                logging.error("2. Convert to OpenSSH format: ssh-keygen -p -f key_file -m pem")
+                logging.error("3. Regenerate key: ssh-keygen -t rsa -b 4096 -C 'flux-deploy-key'")
+            elif "Permission denied" in stderr_output:
+                logging.error("SSH authentication failed. Check:")
+                logging.error("1. SSH key has correct permissions in repository")
+                logging.error("2. SSH key is added to repository deploy keys")
+                logging.error("3. Repository URL format is correct")
+            elif "Could not resolve hostname" in stderr_output:
+                logging.error("DNS/Network issue. Check internet connectivity and DNS resolution")
+
             return False
 
     except Exception as e:
