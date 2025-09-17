@@ -20,6 +20,11 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ default (include "fluxcd-helm-upgrader.fullname" .) .Values.serviceAccount.name }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
       containers:
         - name: app
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -41,16 +46,16 @@ spec:
               value: {{ .Values.repo.cloneDir | quote }}
             {{- if and .Values.repo.sshKeySecret.enabled .Values.repo.sshKeySecret.name }}
             - name: SSH_PRIVATE_KEY_PATH
-              value: "/etc/ssh-keys/private_key"
+              value: "/home/app/.ssh/id_rsa"
             - name: SSH_PUBLIC_KEY_PATH
-              value: "/etc/ssh-keys/public_key"
+              value: "/home/app/.ssh/id_rsa.pub"
             - name: SSH_KNOWN_HOSTS_PATH
-              value: "/etc/ssh-keys/known_hosts"
+              value: "/home/app/.ssh/known_hosts"
             {{- end }}
           volumeMounts:
             {{- if and .Values.repo.sshKeySecret.enabled .Values.repo.sshKeySecret.name }}
             - name: ssh-keys
-              mountPath: /etc/ssh-keys
+              mountPath: /home/app/.ssh
               readOnly: true
             {{- end }}
           resources:

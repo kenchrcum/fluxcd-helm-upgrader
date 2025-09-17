@@ -35,23 +35,29 @@ REPO_URL = os.getenv("REPO_URL", "").strip()
 REPO_BRANCH = os.getenv("REPO_BRANCH", "").strip()
 REPO_SEARCH_PATTERN = os.getenv(
     "REPO_SEARCH_PATTERN",
-    "/components/{namespace}/helmrelease*.y*ml",
+    "/components/{namespace}/*/helmrelease*.y*ml",
 ).strip()
 REPO_CLONE_DIR = os.getenv("REPO_CLONE_DIR", "/tmp/fluxcd-repo").strip()
 
 # SSH key configuration for private repository access
-SSH_PRIVATE_KEY_PATH = os.getenv("SSH_PRIVATE_KEY_PATH", "/etc/ssh-keys/private_key").strip()
-SSH_PUBLIC_KEY_PATH = os.getenv("SSH_PUBLIC_KEY_PATH", "/etc/ssh-keys/public_key").strip()
-SSH_KNOWN_HOSTS_PATH = os.getenv("SSH_KNOWN_HOSTS_PATH", "/etc/ssh-keys/known_hosts").strip()
+SSH_PRIVATE_KEY_PATH = os.getenv("SSH_PRIVATE_KEY_PATH", "/home/app/.ssh/id_rsa").strip()
+SSH_PUBLIC_KEY_PATH = os.getenv("SSH_PUBLIC_KEY_PATH", "/home/app/.ssh/id_rsa.pub").strip()
+SSH_KNOWN_HOSTS_PATH = os.getenv("SSH_KNOWN_HOSTS_PATH", "/home/app/.ssh/known_hosts").strip()
 
 
 
 def setup_ssh_config() -> bool:
     """Setup SSH configuration for git operations."""
     try:
-        # Create SSH directory if it doesn't exist
-        ssh_dir = Path("/root/.ssh")
+        # Determine SSH directory based on environment
+        if os.path.exists("/home/app"):  # Container environment
+            home_dir = Path("/home/app")
+        else:  # Local development environment
+            home_dir = Path.home()
+
+        ssh_dir = home_dir / ".ssh"
         ssh_dir.mkdir(mode=0o700, exist_ok=True)
+        logging.debug("SSH directory ready: %s", ssh_dir)
 
         # Copy SSH keys if they exist
         private_key_src = Path(SSH_PRIVATE_KEY_PATH)
@@ -62,15 +68,17 @@ def setup_ssh_config() -> bool:
         public_key_dst = ssh_dir / "id_rsa.pub"
         known_hosts_dst = ssh_dir / "known_hosts"
 
-        # Copy private key
-        if private_key_src.exists():
-            import shutil
-            shutil.copy2(private_key_src, private_key_dst)
-            private_key_dst.chmod(0o600)
-            logging.info("SSH private key copied to %s", private_key_dst)
-        else:
-            logging.warning("SSH private key not found at %s", SSH_PRIVATE_KEY_PATH)
+        # Check if SSH keys exist
+        if not private_key_src.exists():
+            logging.error("SSH private key not found at %s", SSH_PRIVATE_KEY_PATH)
+            logging.error("Make sure the SSH private key file exists and the path is correct")
             return False
+
+        # Copy private key
+        import shutil
+        shutil.copy2(private_key_src, private_key_dst)
+        private_key_dst.chmod(0o600)
+        logging.debug("SSH private key copied to %s", private_key_dst)
 
         # Copy public key if it exists
         if public_key_src.exists():
@@ -87,11 +95,12 @@ def setup_ssh_config() -> bool:
             with open(known_hosts_dst, 'a') as f:
                 f.write(github_known_hosts + "\n")
             known_hosts_dst.chmod(0o644)
-            logging.info("Added GitHub to known hosts")
+            logging.debug("Added GitHub to known hosts")
 
-        # Configure git to use SSH
+        # Configure git to use SSH with user's SSH directory
+        ssh_dir_str = str(ssh_dir)
         env = os.environ.copy()
-        env.setdefault("GIT_SSH_COMMAND", "ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/root/.ssh/known_hosts -i /root/.ssh/id_rsa")
+        env.setdefault("GIT_SSH_COMMAND", f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={ssh_dir_str}/known_hosts -i {ssh_dir_str}/id_rsa")
 
         return True
 
@@ -109,9 +118,18 @@ def validate_ssh_access(repo_url: str) -> bool:
         # Convert HTTPS URL to SSH URL if needed
         ssh_url = convert_to_ssh_url(repo_url)
 
+        # Determine SSH directory based on environment
+        if os.path.exists("/home/app"):  # Container environment
+            home_dir = Path("/home/app")
+        else:  # Local development environment
+            home_dir = Path.home()
+
+        ssh_dir = home_dir / ".ssh"
+        ssh_dir_str = str(ssh_dir)
+
         # Test SSH access with git ls-remote
         env = os.environ.copy()
-        env.setdefault("GIT_SSH_COMMAND", "ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/root/.ssh/known_hosts -i /root/.ssh/id_rsa")
+        env.setdefault("GIT_SSH_COMMAND", f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={ssh_dir_str}/known_hosts -i {ssh_dir_str}/id_rsa")
 
         result = subprocess.run(
             ["git", "ls-remote", ssh_url, "HEAD"],
@@ -122,7 +140,7 @@ def validate_ssh_access(repo_url: str) -> bool:
         )
 
         if result.returncode == 0:
-            logging.info("SSH access to repository validated successfully")
+            logging.debug("SSH access validated")
             return True
         else:
             logging.error("SSH access validation failed: %s", result.stderr.strip())
@@ -185,8 +203,15 @@ def _run_git_command(args: List[str], cwd: Optional[str] = None) -> Tuple[int, s
     env.setdefault("GIT_CONFIG_GLOBAL", "")
     env.setdefault("GIT_CONFIG_SYSTEM", "")
 
-    # Use SSH authentication
-    env.setdefault("GIT_SSH_COMMAND", "ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/root/.ssh/known_hosts -i /root/.ssh/id_rsa")
+    # Use SSH authentication with appropriate SSH directory
+    if os.path.exists("/home/app"):  # Container environment
+        home_dir = Path("/home/app")
+    else:  # Local development environment
+        home_dir = Path.home()
+
+    ssh_dir = home_dir / ".ssh"
+    ssh_dir_str = str(ssh_dir)
+    env.setdefault("GIT_SSH_COMMAND", f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={ssh_dir_str}/known_hosts -i {ssh_dir_str}/id_rsa")
     base_cmd = ["git"]
     base_cmd += ["-c", "credential.helper="]  # Disable credential helpers
 
@@ -210,88 +235,87 @@ def _run_git_command(args: List[str], cwd: Optional[str] = None) -> Tuple[int, s
 
 def ensure_repo_cloned_or_updated() -> Optional[str]:
     if not REPO_URL:
+        logging.debug("No REPO_URL configured, skipping repository operations")
         return None
 
     clone_dir_path = Path(REPO_CLONE_DIR)
+    repo_url = convert_to_ssh_url(REPO_URL)
 
     # Setup SSH configuration
     if not setup_ssh_config():
         logging.error("Failed to setup SSH configuration")
         return None
 
-    # Convert HTTPS URL to SSH URL if needed
-    repo_url = convert_to_ssh_url(REPO_URL)
-
     # Validate SSH access
     if not validate_ssh_access(repo_url):
         logging.error("SSH access validation failed. Please check SSH key permissions and repository access.")
         return None
 
-    logging.info("Using SSH authentication for repository access")
     try:
         if not clone_dir_path.exists():
+            # Clone repository for the first time
             clone_dir_path.mkdir(parents=True, exist_ok=True)
             clone_args: List[str] = ["clone", "--depth", "1"]
             if REPO_BRANCH:
                 clone_args += ["--branch", REPO_BRANCH, "--single-branch"]
             clone_args += [repo_url, str(clone_dir_path)]
+
+            logging.info("Cloning repository from %s...", repo_url)
             code, out, err = _run_git_command(clone_args)
             if code != 0:
                 sanitized_err = err.strip()
-                logging.error("Failed to clone repo with SSH auth: %s", sanitized_err)
+                logging.error("Failed to clone repository: %s", sanitized_err)
                 logging.error("SSH authentication failed. Please check: 1) SSH private key is mounted correctly, 2) Deploy key has read access to repository, 3) SSH configuration is correct")
                 return None
-            logging.info("Cloned repository into %s", clone_dir_path)
+            logging.info("✅ Repository cloned successfully")
         else:
-            # If already a git repo, fetch and reset to origin/branch
+            # Update existing repository
             git_dir = clone_dir_path / ".git"
             if not git_dir.exists():
-                # If the directory is empty or in /tmp, clean it and clone fresh
+                logging.warning("Repository directory exists but is not a git repository, removing and re-cloning...")
                 try:
-                    is_empty = not any(clone_dir_path.iterdir())
-                except Exception:
-                    is_empty = False
-                if is_empty or str(clone_dir_path).startswith("/tmp/"):
-                    try:
-                        shutil.rmtree(clone_dir_path)
-                    except FileNotFoundError:
-                        pass
-                    clone_dir_path.mkdir(parents=True, exist_ok=True)
-                    clone_args = ["clone", "--depth", "1"]
-                    if REPO_BRANCH:
-                        clone_args += ["--branch", REPO_BRANCH, "--single-branch"]
-                    clone_args += [repo_url, str(clone_dir_path)]
-                    code, out, err = _run_git_command(clone_args)
-                    if code != 0:
-                        sanitized_err = err.strip()
-                        logging.error("Failed to clone repo into %s with SSH auth: %s", clone_dir_path, sanitized_err)
-                        logging.error("SSH authentication failed. Please check: 1) SSH private key is mounted correctly, 2) Deploy key has read access to repository, 3) SSH configuration is correct")
-                        return None
-                    logging.info("Cloned repository into %s", clone_dir_path)
-                else:
-                    logging.error(
-                        "Clone dir exists but is not a git repo and not empty/outside /tmp: %s. Set REPO_CLONE_DIR to an empty path.",
-                        clone_dir_path,
-                    )
+                    shutil.rmtree(clone_dir_path)
+                except FileNotFoundError:
+                    pass
+                clone_dir_path.mkdir(parents=True, exist_ok=True)
+                clone_args = ["clone", "--depth", "1"]
+                if REPO_BRANCH:
+                    clone_args += ["--branch", REPO_BRANCH, "--single-branch"]
+                clone_args += [repo_url, str(clone_dir_path)]
+
+                code, out, err = _run_git_command(clone_args)
+                if code != 0:
+                    sanitized_err = err.strip()
+                    logging.error("Failed to re-clone repository: %s", sanitized_err)
                     return None
-            # Fetch
-            code, out, err = _run_git_command(["fetch", "--tags", "--prune", "origin"], cwd=str(clone_dir_path))
-            if code != 0:
-                logging.error("Failed to fetch repo updates: %s", err.strip())
-                return str(clone_dir_path)
-            # Determine branch to reset to
-            branch = REPO_BRANCH
-            if not branch:
-                code, out, err = _run_git_command(["symbolic-ref", "refs/remotes/origin/HEAD"], cwd=str(clone_dir_path))
-                if code == 0 and out.strip().startswith("origin/"):
-                    branch = out.strip().split("/", 1)[1]
-                else:
-                    branch = "main"
-            # Reset hard to remote branch
-            code, out, err = _run_git_command(["reset", "--hard", f"origin/{branch}"], cwd=str(clone_dir_path))
-            if code != 0:
-                logging.error("Failed to reset repo to origin/%s: %s", branch, err.strip())
-            _run_git_command(["clean", "-fdx"], cwd=str(clone_dir_path))
+                logging.info("✅ Repository re-cloned successfully")
+            else:
+                # Update existing repository
+                logging.debug("Updating existing repository...")
+                code, out, err = _run_git_command(["fetch", "--tags", "--prune", "origin"], cwd=str(clone_dir_path))
+                if code != 0:
+                    logging.error("Failed to fetch repository updates: %s", err.strip())
+                    return str(clone_dir_path)
+
+                # Determine branch to reset to
+                branch = REPO_BRANCH
+                if not branch:
+                    code, out, err = _run_git_command(["symbolic-ref", "refs/remotes/origin/HEAD"], cwd=str(clone_dir_path))
+                    if code == 0 and out.strip().startswith("origin/"):
+                        branch = out.strip().split("/", 1)[1]
+                    else:
+                        branch = "main"
+
+                # Reset hard to remote branch
+                code, out, err = _run_git_command(["reset", "--hard", f"origin/{branch}"], cwd=str(clone_dir_path))
+                if code != 0:
+                    logging.error("Failed to reset repository to origin/%s: %s", branch, err.strip())
+                    return str(clone_dir_path)
+
+                # Clean untracked files
+                _run_git_command(["clean", "-fdx"], cwd=str(clone_dir_path))
+                logging.debug("✅ Repository updated successfully")
+
     except Exception:
         logging.exception("Failed preparing repository at %s", clone_dir_path)
         return None
@@ -580,6 +604,15 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
     if hr_version is None:
         logging.error("No HelmRelease API version available; skipping iteration")
         return
+
+    # Clone/update repository once at the beginning if REPO_URL is configured
+    repo_dir = None
+    if REPO_URL:
+        logging.debug("Initializing repository access...")
+        repo_dir = ensure_repo_cloned_or_updated()
+        if not repo_dir:
+            logging.warning("⚠️  Repository access failed, continuing without manifest path resolution")
+
     for hr in releases:
         hr_ns = hr["metadata"]["namespace"]
         hr_name = hr["metadata"]["name"]
@@ -621,30 +654,42 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
             logging.debug("%s/%s: unable to parse repo version '%s'", hr_ns, hr_name, latest_text)
             continue
 
+        # Try to locate the HelmRelease manifest path if repository is available
+        if repo_dir:
+            manifest_rel_path = resolve_manifest_path_for_release(repo_dir, hr_ns, hr_name)
+            if manifest_rel_path:
+                if latest_ver > current_version:
+                    # Show manifest path for releases with updates available
+                    logging.info(
+                        "📄 %s/%s -> %s",
+                        hr_ns,
+                        hr_name,
+                        manifest_rel_path,
+                    )
+                else:
+                    # Debug level for releases that are up-to-date
+                    logging.debug(
+                        "📄 %s/%s -> %s (up-to-date)",
+                        hr_ns,
+                        hr_name,
+                        manifest_rel_path,
+                    )
+            else:
+                logging.debug(
+                    "No manifest found for %s/%s (pattern: %s)",
+                    hr_ns,
+                    hr_name,
+                    REPO_SEARCH_PATTERN,
+                )
+
         if latest_ver > current_version:
             logging.info(
-                "Update available: HelmRelease %s/%s for chart %s -> %s (current %s)",
+                "📈 Update available: %s/%s (%s -> %s)",
                 hr_ns,
                 hr_name,
-                chart_name,
-                latest_text,
                 current_version_text,
+                latest_text,
             )
-            # If repo is configured, try to locate the HelmRelease manifest path so we know what file to update later
-            if REPO_URL:
-                repo_dir = ensure_repo_cloned_or_updated()
-                if repo_dir:
-                    manifest_rel_path = resolve_manifest_path_for_release(repo_dir, hr_ns, hr_name)
-                    if manifest_rel_path:
-                        logging.info(
-                            "Manifest path: %s (repo root)",
-                            manifest_rel_path,
-                        )
-                    else:
-                        logging.info(
-                            "Manifest path not found using pattern '%s'",
-                            REPO_SEARCH_PATTERN,
-                        )
         else:
             logging.debug(
                 "%s/%s: up-to-date (chart %s current %s, latest %s)",
@@ -660,12 +705,22 @@ def main() -> None:
     configure_logging()
     coapi = load_kube_config()
     interval = DEFAULT_INTERVAL_SECONDS
-    logging.info("Starting FluxCD Helm upgrader loop with interval=%ss", interval)
+
+    # Log configuration once at startup
+    logging.info("🚀 Starting FluxCD Helm upgrader (interval: %ss)", interval)
+    if REPO_URL:
+        logging.info("📂 Repository: %s", REPO_URL)
+        logging.info("🔑 SSH Keys: %s, %s", SSH_PRIVATE_KEY_PATH, SSH_PUBLIC_KEY_PATH)
+    else:
+        logging.info("📂 No repository URL configured - only cluster scanning enabled")
     while True:
+        logging.info("🔄 Starting new check cycle...")
         try:
             check_once(coapi)
+            logging.info("✅ Check cycle completed")
         except Exception:
-            logging.exception("Unexpected failure during check loop")
+            logging.exception("❌ Unexpected failure during check loop")
+        logging.info("⏰ Sleeping for %s seconds...", interval)
         time.sleep(interval)
 
 

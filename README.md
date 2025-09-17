@@ -17,14 +17,14 @@ Environment variables:
 - `INCLUDE_PRERELEASE` (default `false`)
  - `REPO_URL` (Flux repo to scan, e.g. `https://github.com/org/flux-infra.git`)
  - `REPO_BRANCH` (optional branch, default repo default)
- - `REPO_SEARCH_PATTERN` (glob with placeholders; default `/components/{namespace}/helmrelease*.y*ml`)
+ - `REPO_SEARCH_PATTERN` (glob with placeholders; default `/components/{namespace}/*/helmrelease*.y*ml`)
  - `REPO_CLONE_DIR` (default `/tmp/fluxcd-repo`)
 
 ### SSH Key Authentication (Required for Private Repositories)
 For private repositories, SSH keys are required:
-- `SSH_PRIVATE_KEY_PATH` (default `/etc/ssh-keys/private_key`)
-- `SSH_PUBLIC_KEY_PATH` (default `/etc/ssh-keys/public_key`)
-- `SSH_KNOWN_HOSTS_PATH` (default `/etc/ssh-keys/known_hosts`)
+- `SSH_PRIVATE_KEY_PATH` (default `/home/app/.ssh/id_rsa` in container, local path when running locally)
+- `SSH_PUBLIC_KEY_PATH` (default `/home/app/.ssh/id_rsa.pub` in container, local path when running locally)
+- `SSH_KNOWN_HOSTS_PATH` (default `/home/app/.ssh/known_hosts` in container, local path when running locally)
 
 ## Build
 ```bash
@@ -59,15 +59,17 @@ kubectl apply -f k8s/deployment.yaml
 repo:
   url: https://github.com/your-org/flux-infra.git
   branch: main
-  searchPattern: "/components/{namespace}/helmrelease*.y*ml"
+  searchPattern: "/components/{namespace}/*/helmrelease*.y*ml"
   cloneDir: /tmp/fluxcd-repo
   sshKeySecret:
     enabled: true
     name: fluxcd-helm-upgrader-ssh
-    privateKey: id_rsa
-    publicKey: id_rsa.pub
-    knownHosts: known_hosts
+    privateKey: id_rsa          # Key name in the secret containing private key
+    publicKey: id_rsa.pub       # Key name in the secret containing public key
+    knownHosts: known_hosts     # Key name in the secret containing known_hosts
 ```
+
+The SSH keys will be mounted to `/home/app/.ssh/` in the container and the application runs as user `1001` (non-root).
 
 ### Creating SSH Key Secret
 ```bash
@@ -82,4 +84,6 @@ kubectl create secret generic fluxcd-helm-upgrader-ssh \
 ## Notes
 - OCI HelmRepository types are currently skipped.
 - Creating PRs/merges to bump versions is out of scope for now, but the code is structured to extend later.
- - When an update is detected and `repo.url` is configured, the app logs the relative manifest path to change (under repo root) based on `repo.searchPattern`.
+- When an update is detected and `repo.url` is configured, the app logs the manifest file path that needs to be updated
+- Manifest paths are only shown for HelmReleases with available updates (to reduce log spam)
+- Use DEBUG log level to see manifest paths for all HelmReleases, including up-to-date ones

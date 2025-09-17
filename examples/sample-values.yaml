@@ -17,13 +17,13 @@ includePrerelease: false
 repo:
   url: https://github.com/your-org/flux-infra.git
   branch: main
-  searchPattern: "/components/{namespace}/helmrelease*.y*ml"
+  searchPattern: "/components/{namespace}/*/helmrelease*.y*ml"
   cloneDir: /tmp/fluxcd-repo
 
   # SSH key authentication (required for private repositories)
   sshKeySecret:
     enabled: true
     name: fluxcd-helm-upgrader-ssh
-    privateKey: id_rsa
-    publicKey: id_rsa.pub
-    knownHosts: known_hosts
+    privateKey: id_rsa          # Key name in the secret containing private key
+    publicKey: id_rsa.pub       # Key name in the secret containing public key
+    knownHosts: known_hosts     # Key name in the secret containing known_hosts
