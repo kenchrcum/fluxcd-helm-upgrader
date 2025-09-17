@@ -117,7 +117,7 @@ def setup_ssh_config() -> bool:
         env = os.environ.copy()
         env.setdefault(
             "GIT_SSH_COMMAND",
-            f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={SSH_KNOWN_HOSTS_PATH} -i {SSH_PRIVATE_KEY_PATH}",
+            f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={SSH_KNOWN_HOSTS_PATH} -i {SSH_PRIVATE_KEY_PATH} -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=30",
         )
 
         return True
@@ -149,7 +149,7 @@ def validate_ssh_access(repo_url: str) -> bool:
         env = os.environ.copy()
         env.setdefault(
             "GIT_SSH_COMMAND",
-            f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={SSH_KNOWN_HOSTS_PATH} -i {SSH_PRIVATE_KEY_PATH}",
+            f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={SSH_KNOWN_HOSTS_PATH} -i {SSH_PRIVATE_KEY_PATH} -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=30",
         )
 
         result = subprocess.run(
@@ -234,7 +234,7 @@ def _run_git_command(
     ssh_dir_str = str(ssh_dir)
     env.setdefault(
         "GIT_SSH_COMMAND",
-        f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={SSH_KNOWN_HOSTS_PATH} -i {SSH_PRIVATE_KEY_PATH}",
+        f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={SSH_KNOWN_HOSTS_PATH} -i {SSH_PRIVATE_KEY_PATH} -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=30",
     )
     base_cmd = ["git"]
     base_cmd += ["-c", "credential.helper="]  # Disable credential helpers
