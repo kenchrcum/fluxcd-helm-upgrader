@@ -46,9 +46,9 @@ spec:
               value: {{ .Values.repo.cloneDir | quote }}
             {{- if and .Values.repo.sshKeySecret.enabled .Values.repo.sshKeySecret.name }}
             - name: SSH_PRIVATE_KEY_PATH
-              value: "/home/app/.ssh/id_rsa"
+              value: "/home/app/.ssh/private_key"
             - name: SSH_PUBLIC_KEY_PATH
-              value: "/home/app/.ssh/id_rsa.pub"
+              value: "/home/app/.ssh/public_key"
             - name: SSH_KNOWN_HOSTS_PATH
               value: "/home/app/.ssh/known_hosts"
             {{- end }}
