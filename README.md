@@ -180,7 +180,7 @@ kubectl logs -l app.kubernetes.io/name=fluxcd-helm-upgrader
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `image.repository` | Docker image repository | `ghcr.io/kenchrcum/fluxcd-helm-upgrader` |
-| `image.tag` | Docker image tag | `0.1.0` |
+| `image.tag` | Docker image tag | `0.1.1` |
 | `image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `replicaCount` | Number of replicas | `1` |
 | `repo.url` | Git repository URL to scan for manifests | `""` |
