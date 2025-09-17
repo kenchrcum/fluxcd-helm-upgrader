@@ -39,15 +39,39 @@ spec:
               value: {{ .Values.repo.searchPattern | quote }}
             - name: REPO_CLONE_DIR
               value: {{ .Values.repo.cloneDir | quote }}
-            {{- if and .Values.repo.githubTokenSecret.enabled .Values.repo.githubTokenSecret.name }}
-            - name: GITHUB_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.repo.githubTokenSecret.name }}
-                  key: {{ default "token" .Values.repo.githubTokenSecret.key | quote }}
+            {{- if and .Values.repo.sshKeySecret.enabled .Values.repo.sshKeySecret.name }}
+            - name: SSH_PRIVATE_KEY_PATH
+              value: "/etc/ssh-keys/private_key"
+            - name: SSH_PUBLIC_KEY_PATH
+              value: "/etc/ssh-keys/public_key"
+            - name: SSH_KNOWN_HOSTS_PATH
+              value: "/etc/ssh-keys/known_hosts"
+            {{- end }}
+          volumeMounts:
+            {{- if and .Values.repo.sshKeySecret.enabled .Values.repo.sshKeySecret.name }}
+            - name: ssh-keys
+              mountPath: /etc/ssh-keys
+              readOnly: true
             {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        {{- if and .Values.repo.sshKeySecret.enabled .Values.repo.sshKeySecret.name }}
+        - name: ssh-keys
+          secret:
+            secretName: {{ .Values.repo.sshKeySecret.name }}
+            items:
+              - key: {{ .Values.repo.sshKeySecret.privateKey }}
+                path: private_key
+              {{- if .Values.repo.sshKeySecret.publicKey }}
+              - key: {{ .Values.repo.sshKeySecret.publicKey }}
+                path: public_key
+              {{- end }}
+              {{- if .Values.repo.sshKeySecret.knownHosts }}
+              - key: {{ .Values.repo.sshKeySecret.knownHosts }}
+                path: known_hosts
+              {{- end }}
+        {{- end }}
       nodeSelector:
         {{- toYaml .Values.nodeSelector | nindent 8 }}
       tolerations:

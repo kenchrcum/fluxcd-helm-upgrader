@@ -19,7 +19,12 @@ Environment variables:
  - `REPO_BRANCH` (optional branch, default repo default)
  - `REPO_SEARCH_PATTERN` (glob with placeholders; default `/components/{namespace}/helmrelease*.y*ml`)
  - `REPO_CLONE_DIR` (default `/tmp/fluxcd-repo`)
- - `GITHUB_TOKEN` (optional; token for private GitHub repos)
+
+### SSH Key Authentication (Required for Private Repositories)
+For private repositories, SSH keys are required:
+- `SSH_PRIVATE_KEY_PATH` (default `/etc/ssh-keys/private_key`)
+- `SSH_PUBLIC_KEY_PATH` (default `/etc/ssh-keys/public_key`)
+- `SSH_KNOWN_HOSTS_PATH` (default `/etc/ssh-keys/known_hosts`)
 
 ## Build
 ```bash
@@ -48,17 +53,31 @@ kubectl apply -f k8s/deployment.yaml
 ```
 
 ### Helm values for repo configuration
+
+#### SSH Key Authentication (Required for Private Repositories)
 ```yaml
 repo:
   url: https://github.com/your-org/flux-infra.git
   branch: main
   searchPattern: "/components/{namespace}/helmrelease*.y*ml"
   cloneDir: /tmp/fluxcd-repo
-  githubTokenSecret:
+  sshKeySecret:
     enabled: true
-    name: fluxcd-helm-upgrader-github
-    key: token
+    name: fluxcd-helm-upgrader-ssh
+    privateKey: id_rsa
+    publicKey: id_rsa.pub
+    knownHosts: known_hosts
 ```
+
+### Creating SSH Key Secret
+```bash
+# Create the SSH key secret from your deploy key
+kubectl create secret generic fluxcd-helm-upgrader-ssh \
+  --from-file=id_rsa=/path/to/your/deploy-key \
+  --from-file=id_rsa.pub=/path/to/your/deploy-key.pub \
+  --from-literal=known_hosts="github.com ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEAq2A7hRGmdnm9tUDbO9IDSwBK6TbQa+PXYPCPy6rbTrTtw7PHkccKrpp0yVhp5HdEIcKr6pLlVDBfOLX9QUsyCOV0wzfjIJNlGEYsdlLJizHhbn2mUjvSAHQqZETYP81eFzLQNnPHt4EVVUh7VfDESU84KezmD5QlWpXLmvU31/yMf+Se8xhHTvKSCZIFImWwoG6mbUoWf9nzpIoaSjB+weqqUUmpaaasXVal72J+UX2B+2RPW3RcT0eOzQgqlJL3RKrTJvdsjE3JEAvGq3lGHSZXy28G3skua2SmVi/w4yCE6gbODqnTWlg7+wC604ydGXA8VJiS5ap43JXiUFFAaQ=="
+```
+
 
 ## Notes
 - OCI HelmRepository types are currently skipped.

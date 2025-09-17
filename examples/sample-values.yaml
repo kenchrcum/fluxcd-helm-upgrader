@@ -12,3 +12,18 @@ rbac:
 logLevel: INFO
 intervalSeconds: 300
 includePrerelease: false
+
+# Git repository configuration
+repo:
+  url: https://github.com/your-org/flux-infra.git
+  branch: main
+  searchPattern: "/components/{namespace}/helmrelease*.y*ml"
+  cloneDir: /tmp/fluxcd-repo
+
+  # SSH key authentication (required for private repositories)
+  sshKeySecret:
+    enabled: true
+    name: fluxcd-helm-upgrader-ssh
+    privateKey: id_rsa
+    publicKey: id_rsa.pub
+    knownHosts: known_hosts
