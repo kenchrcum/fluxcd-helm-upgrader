@@ -23,7 +23,12 @@ HELM_RELEASE_VERSIONS = ["v2", "v2beta2", "v2beta1"]
 SOURCE_VERSIONS = ["v1", "v1beta2", "v1beta1"]
 
 DEFAULT_INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", "300"))
-INCLUDE_PRERELEASE = os.getenv("INCLUDE_PRERELEASE", "false").lower() in ("1", "true", "yes", "on")
+INCLUDE_PRERELEASE = os.getenv("INCLUDE_PRERELEASE", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 REQUEST_TIMEOUT = (5, 20)  # connect, read
 DEFAULT_HEADERS = {
     "User-Agent": "fluxcd-helm-upgrader/0.1 (+https://github.com/kenchrcum/fluxcd-helm-upgrader)",
@@ -40,10 +45,15 @@ REPO_SEARCH_PATTERN = os.getenv(
 REPO_CLONE_DIR = os.getenv("REPO_CLONE_DIR", "/tmp/fluxcd-repo").strip()
 
 # SSH key configuration for private repository access
-SSH_PRIVATE_KEY_PATH = os.getenv("SSH_PRIVATE_KEY_PATH", "/home/app/.ssh/id_rsa").strip()
-SSH_PUBLIC_KEY_PATH = os.getenv("SSH_PUBLIC_KEY_PATH", "/home/app/.ssh/id_rsa.pub").strip()
-SSH_KNOWN_HOSTS_PATH = os.getenv("SSH_KNOWN_HOSTS_PATH", "/home/app/.ssh/known_hosts").strip()
-
+SSH_PRIVATE_KEY_PATH = os.getenv(
+    "SSH_PRIVATE_KEY_PATH", "/home/app/.ssh/id_rsa"
+).strip()
+SSH_PUBLIC_KEY_PATH = os.getenv(
+    "SSH_PUBLIC_KEY_PATH", "/home/app/.ssh/id_rsa.pub"
+).strip()
+SSH_KNOWN_HOSTS_PATH = os.getenv(
+    "SSH_KNOWN_HOSTS_PATH", "/home/app/.ssh/known_hosts"
+).strip()
 
 
 def setup_ssh_config() -> bool:
@@ -71,11 +81,14 @@ def setup_ssh_config() -> bool:
         # Check if SSH keys exist
         if not private_key_src.exists():
             logging.error("SSH private key not found at %s", SSH_PRIVATE_KEY_PATH)
-            logging.error("Make sure the SSH private key file exists and the path is correct")
+            logging.error(
+                "Make sure the SSH private key file exists and the path is correct"
+            )
             return False
 
         # Copy private key
         import shutil
+
         shutil.copy2(private_key_src, private_key_dst)
         private_key_dst.chmod(0o600)
         logging.debug("SSH private key copied to %s", private_key_dst)
@@ -92,7 +105,7 @@ def setup_ssh_config() -> bool:
         else:
             # Add GitHub to known hosts if not present
             github_known_hosts = "github.com ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEAq2A7hRGmdnm9tUDbO9IDSwBK6TbQa+PXYPCPy6rbTrTtw7PHkccKrpp0yVhp5HdEIcKr6pLlVDBfOLX9QUsyCOV0wzfjIJNlGEYsdlLJizHhbn2mUjvSAHQqZETYP81eFzLQNnPHt4EVVUh7VfDESU84KezmD5QlWpXLmvU31/yMf+Se8xhHTvKSCZIFImWwoG6mbUoWf9nzpIoaSjB+weqqUUmpaaasXVal72J+UX2B+2RPW3RcT0eOzQgqlJL3RKrTJvdsjE3JEAvGq3lGHSZXy28G3skua2SmVi/w4yCE6gbODqnTWlg7+wC604ydGXA8VJiS5ap43JXiUFFAaQ=="
-            with open(known_hosts_dst, 'a') as f:
+            with open(known_hosts_dst, "a") as f:
                 f.write(github_known_hosts + "\n")
             known_hosts_dst.chmod(0o644)
             logging.debug("Added GitHub to known hosts")
@@ -100,7 +113,10 @@ def setup_ssh_config() -> bool:
         # Configure git to use SSH with user's SSH directory
         ssh_dir_str = str(ssh_dir)
         env = os.environ.copy()
-        env.setdefault("GIT_SSH_COMMAND", f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={ssh_dir_str}/known_hosts -i {ssh_dir_str}/id_rsa")
+        env.setdefault(
+            "GIT_SSH_COMMAND",
+            f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={ssh_dir_str}/known_hosts -i {ssh_dir_str}/id_rsa",
+        )
 
         return True
 
@@ -129,14 +145,17 @@ def validate_ssh_access(repo_url: str) -> bool:
 
         # Test SSH access with git ls-remote
         env = os.environ.copy()
-        env.setdefault("GIT_SSH_COMMAND", f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={ssh_dir_str}/known_hosts -i {ssh_dir_str}/id_rsa")
+        env.setdefault(
+            "GIT_SSH_COMMAND",
+            f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={ssh_dir_str}/known_hosts -i {ssh_dir_str}/id_rsa",
+        )
 
         result = subprocess.run(
             ["git", "ls-remote", ssh_url, "HEAD"],
             env=env,
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=30,
         )
 
         if result.returncode == 0:
@@ -173,8 +192,6 @@ def convert_to_ssh_url(url: str) -> str:
         return url
 
 
-
-
 def configure_logging() -> None:
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(
@@ -193,7 +210,9 @@ def load_kube_config() -> client.CustomObjectsApi:
     return client.CustomObjectsApi()
 
 
-def _run_git_command(args: List[str], cwd: Optional[str] = None) -> Tuple[int, str, str]:
+def _run_git_command(
+    args: List[str], cwd: Optional[str] = None
+) -> Tuple[int, str, str]:
     env = os.environ.copy()
     # Disable terminal prompts entirely so we fail fast instead of hanging
     env.setdefault("GIT_TERMINAL_PROMPT", "0")
@@ -211,7 +230,10 @@ def _run_git_command(args: List[str], cwd: Optional[str] = None) -> Tuple[int, s
 
     ssh_dir = home_dir / ".ssh"
     ssh_dir_str = str(ssh_dir)
-    env.setdefault("GIT_SSH_COMMAND", f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={ssh_dir_str}/known_hosts -i {ssh_dir_str}/id_rsa")
+    env.setdefault(
+        "GIT_SSH_COMMAND",
+        f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={ssh_dir_str}/known_hosts -i {ssh_dir_str}/id_rsa",
+    )
     base_cmd = ["git"]
     base_cmd += ["-c", "credential.helper="]  # Disable credential helpers
 
@@ -248,7 +270,9 @@ def ensure_repo_cloned_or_updated() -> Optional[str]:
 
     # Validate SSH access
     if not validate_ssh_access(repo_url):
-        logging.error("SSH access validation failed. Please check SSH key permissions and repository access.")
+        logging.error(
+            "SSH access validation failed. Please check SSH key permissions and repository access."
+        )
         return None
 
     try:
@@ -265,14 +289,18 @@ def ensure_repo_cloned_or_updated() -> Optional[str]:
             if code != 0:
                 sanitized_err = err.strip()
                 logging.error("Failed to clone repository: %s", sanitized_err)
-                logging.error("SSH authentication failed. Please check: 1) SSH private key is mounted correctly, 2) Deploy key has read access to repository, 3) SSH configuration is correct")
+                logging.error(
+                    "SSH authentication failed. Please check: 1) SSH private key is mounted correctly, 2) Deploy key has read access to repository, 3) SSH configuration is correct"
+                )
                 return None
             logging.info("✅ Repository cloned successfully")
         else:
             # Update existing repository
             git_dir = clone_dir_path / ".git"
             if not git_dir.exists():
-                logging.warning("Repository directory exists but is not a git repository, removing and re-cloning...")
+                logging.warning(
+                    "Repository directory exists but is not a git repository, removing and re-cloning..."
+                )
                 try:
                     shutil.rmtree(clone_dir_path)
                 except FileNotFoundError:
@@ -292,7 +320,9 @@ def ensure_repo_cloned_or_updated() -> Optional[str]:
             else:
                 # Update existing repository
                 logging.debug("Updating existing repository...")
-                code, out, err = _run_git_command(["fetch", "--tags", "--prune", "origin"], cwd=str(clone_dir_path))
+                code, out, err = _run_git_command(
+                    ["fetch", "--tags", "--prune", "origin"], cwd=str(clone_dir_path)
+                )
                 if code != 0:
                     logging.error("Failed to fetch repository updates: %s", err.strip())
                     return str(clone_dir_path)
@@ -300,16 +330,25 @@ def ensure_repo_cloned_or_updated() -> Optional[str]:
                 # Determine branch to reset to
                 branch = REPO_BRANCH
                 if not branch:
-                    code, out, err = _run_git_command(["symbolic-ref", "refs/remotes/origin/HEAD"], cwd=str(clone_dir_path))
+                    code, out, err = _run_git_command(
+                        ["symbolic-ref", "refs/remotes/origin/HEAD"],
+                        cwd=str(clone_dir_path),
+                    )
                     if code == 0 and out.strip().startswith("origin/"):
                         branch = out.strip().split("/", 1)[1]
                     else:
                         branch = "main"
 
                 # Reset hard to remote branch
-                code, out, err = _run_git_command(["reset", "--hard", f"origin/{branch}"], cwd=str(clone_dir_path))
+                code, out, err = _run_git_command(
+                    ["reset", "--hard", f"origin/{branch}"], cwd=str(clone_dir_path)
+                )
                 if code != 0:
-                    logging.error("Failed to reset repository to origin/%s: %s", branch, err.strip())
+                    logging.error(
+                        "Failed to reset repository to origin/%s: %s",
+                        branch,
+                        err.strip(),
+                    )
                     return str(clone_dir_path)
 
                 # Clean untracked files
@@ -322,9 +361,9 @@ def ensure_repo_cloned_or_updated() -> Optional[str]:
     return str(clone_dir_path)
 
 
-
-
-def resolve_manifest_path_for_release(repo_dir: str, namespace: str, name: str) -> Optional[str]:
+def resolve_manifest_path_for_release(
+    repo_dir: str, namespace: str, name: str
+) -> Optional[str]:
     try:
         # Allow multiple patterns separated by ';'
         patterns = [p for p in REPO_SEARCH_PATTERN.split(";") if p.strip()]
@@ -364,11 +403,15 @@ def resolve_manifest_path_for_release(repo_dir: str, namespace: str, name: str) 
                     continue
         return None
     except Exception:
-        logging.exception("Error searching for HelmRelease manifest for %s/%s", namespace, name)
+        logging.exception(
+            "Error searching for HelmRelease manifest for %s/%s", namespace, name
+        )
         return None
 
 
-def list_helm_releases(coapi: client.CustomObjectsApi) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+def list_helm_releases(
+    coapi: client.CustomObjectsApi,
+) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     for version in HELM_RELEASE_VERSIONS:
         try:
             resp = coapi.list_cluster_custom_object(
@@ -388,7 +431,9 @@ def list_helm_releases(coapi: client.CustomObjectsApi) -> Tuple[List[Dict[str, A
         except Exception:
             logging.exception("Unexpected error listing HelmReleases for %s", version)
             continue
-    logging.warning("HelmRelease CRD not found under known versions: %s", HELM_RELEASE_VERSIONS)
+    logging.warning(
+        "HelmRelease CRD not found under known versions: %s", HELM_RELEASE_VERSIONS
+    )
     return [], None
 
 
@@ -403,7 +448,11 @@ def get_namespaced_obj(
     for version in versions:
         try:
             obj = coapi.get_namespaced_custom_object(
-                group=group, version=version, namespace=namespace, plural=plural, name=name
+                group=group,
+                version=version,
+                namespace=namespace,
+                plural=plural,
+                name=name,
             )
             return obj, version
         except ApiException as e:
@@ -412,7 +461,9 @@ def get_namespaced_obj(
             logging.exception("Error getting %s/%s %s", group, version, plural)
             continue
         except Exception:
-            logging.exception("Unexpected error getting %s/%s %s", group, version, plural)
+            logging.exception(
+                "Unexpected error getting %s/%s %s", group, version, plural
+            )
             continue
     return None, None
 
@@ -423,8 +474,8 @@ def get_helm_chart_for_release(
     hr_ns = hr["metadata"]["namespace"]
     hr_name = hr["metadata"]["name"]
     chart_spec = (hr.get("spec") or {}).get("chart") or {}
-    inner_spec = (chart_spec.get("spec") or {})
-    src_ref = (inner_spec.get("sourceRef") or {})
+    inner_spec = chart_spec.get("spec") or {}
+    src_ref = inner_spec.get("sourceRef") or {}
     chart_ns = src_ref.get("namespace") or hr_ns
     chart_name = f"{hr_ns}-{hr_name}"
     chart, version = get_namespaced_obj(
@@ -448,27 +499,33 @@ def resolve_repo_for_release(
     # Prefer resolving through HelmChart, then fallback to HR.spec.chart.spec.sourceRef
     chart, _ = get_helm_chart_for_release(coapi, hr)
     if chart:
-        src_ref = ((chart.get("spec") or {}).get("sourceRef") or {})
+        src_ref = (chart.get("spec") or {}).get("sourceRef") or {}
         if src_ref.get("kind") == "HelmRepository":
             repo, _ = get_helm_repository(
-                coapi, src_ref.get("namespace") or chart["metadata"]["namespace"], src_ref.get("name")
+                coapi,
+                src_ref.get("namespace") or chart["metadata"]["namespace"],
+                src_ref.get("name"),
             )
             if repo:
                 return repo
     chart_spec = (hr.get("spec") or {}).get("chart") or {}
-    inner_spec = (chart_spec.get("spec") or {})
-    src_ref = (inner_spec.get("sourceRef") or {})
+    inner_spec = chart_spec.get("spec") or {}
+    src_ref = inner_spec.get("sourceRef") or {}
     if src_ref.get("kind") == "HelmRepository":
         repo, _ = get_helm_repository(
-            coapi, src_ref.get("namespace") or hr["metadata"]["namespace"], src_ref.get("name")
+            coapi,
+            src_ref.get("namespace") or hr["metadata"]["namespace"],
+            src_ref.get("name"),
         )
         if repo:
             return repo
     return None
 
 
-def get_current_chart_name_and_version(hr: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
-    spec = (hr.get("spec") or {})
+def get_current_chart_name_and_version(
+    hr: Dict[str, Any],
+) -> Tuple[Optional[str], Optional[str]]:
+    spec = hr.get("spec") or {}
     chart_node = spec.get("chart") or {}
     chart_spec = chart_node.get("spec") or {}
     chart_name = chart_spec.get("chart") or chart_node.get("chart")
@@ -491,14 +548,17 @@ def get_current_chart_name_and_version(hr: Dict[str, Any]) -> Tuple[Optional[str
             current_version = candidate if parse_version(candidate) else None
         else:
             # 3) Try to extract a trailing semver (with optional leading 'v')
-            m = re.search(r'(?:^|-)v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z\.-]+)?(?:\+[0-9A-Za-z\.-]+)?)$', applied)
+            m = re.search(
+                r"(?:^|-)v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z\.-]+)?(?:\+[0-9A-Za-z\.-]+)?)$",
+                applied,
+            )
             if m:
                 candidate = m.group(1)
                 current_version = candidate if parse_version(candidate) else None
                 if not chart_name:
                     # Trim trailing '-' if present before the version
                     prefix = applied[: m.start(1)]
-                    if prefix.endswith('-'):
+                    if prefix.endswith("-"):
                         prefix = prefix[:-1]
                     chart_name = prefix or chart_name
             else:
@@ -545,7 +605,11 @@ def fetch_repo_index(repo: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             # Fallbacks for servers serving gzipped content as application/gzip (no Content-Encoding)
             ct = (resp.headers.get("Content-Type") or "").lower()
             content = resp.content or b""
-            if content[:2] == b"\x1f\x8b" or "application/gzip" in ct or "application/x-gzip" in ct:
+            if (
+                content[:2] == b"\x1f\x8b"
+                or "application/gzip" in ct
+                or "application/x-gzip" in ct
+            ):
                 import gzip
 
                 try:
@@ -611,7 +675,9 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
         logging.debug("Initializing repository access...")
         repo_dir = ensure_repo_cloned_or_updated()
         if not repo_dir:
-            logging.warning("⚠️  Repository access failed, continuing without manifest path resolution")
+            logging.warning(
+                "⚠️  Repository access failed, continuing without manifest path resolution"
+            )
 
     for hr in releases:
         hr_ns = hr["metadata"]["namespace"]
@@ -626,18 +692,25 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
         current_version = parse_version(current_version_text)
         if not current_version:
             logging.debug(
-                "%s/%s: unable to parse current version '%s'", hr_ns, hr_name, current_version_text
+                "%s/%s: unable to parse current version '%s'",
+                hr_ns,
+                hr_name,
+                current_version_text,
             )
             continue
 
         repo = resolve_repo_for_release(coapi, hr)
         if not repo:
-            logging.debug("%s/%s: HelmRepository not resolved; skipping", hr_ns, hr_name)
+            logging.debug(
+                "%s/%s: HelmRepository not resolved; skipping", hr_ns, hr_name
+            )
             continue
 
         spec = repo.get("spec") or {}
         if spec.get("type") == "oci":
-            logging.debug("%s/%s: OCI HelmRepository not supported yet; skipping", hr_ns, hr_name)
+            logging.debug(
+                "%s/%s: OCI HelmRepository not supported yet; skipping", hr_ns, hr_name
+            )
             continue
 
         index = fetch_repo_index(repo)
@@ -647,16 +720,25 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
 
         latest_text = latest_available_version(index, chart_name, INCLUDE_PRERELEASE)
         if not latest_text:
-            logging.debug("%s/%s: no versions found in repo index for chart %s", hr_ns, hr_name, chart_name)
+            logging.debug(
+                "%s/%s: no versions found in repo index for chart %s",
+                hr_ns,
+                hr_name,
+                chart_name,
+            )
             continue
         latest_ver = parse_version(latest_text)
         if not latest_ver:
-            logging.debug("%s/%s: unable to parse repo version '%s'", hr_ns, hr_name, latest_text)
+            logging.debug(
+                "%s/%s: unable to parse repo version '%s'", hr_ns, hr_name, latest_text
+            )
             continue
 
         # Try to locate the HelmRelease manifest path if repository is available
         if repo_dir:
-            manifest_rel_path = resolve_manifest_path_for_release(repo_dir, hr_ns, hr_name)
+            manifest_rel_path = resolve_manifest_path_for_release(
+                repo_dir, hr_ns, hr_name
+            )
             if manifest_rel_path:
                 if latest_ver > current_version:
                     # Show manifest path for releases with updates available
