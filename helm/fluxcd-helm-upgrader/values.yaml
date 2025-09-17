@@ -47,6 +47,6 @@ repo:
     enabled: false
     name: ""
     privateKey: "id_rsa"        # Key name for private key in secret
-    publicKey: "id_rsa.pub"     # Key name for public key in secret (optional)
-    knownHosts: "known_hosts"   # Key name for known_hosts in secret (optional)
+    publicKey: "id_rsa.pub"     # Key name for public key in secret
+    knownHosts: "known_hosts"   # Key name for known_hosts in secret
 
