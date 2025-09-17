@@ -17,7 +17,7 @@ spec:
       serviceAccountName: fluxcd-helm-upgrader
       containers:
         - name: app
-          image: ghcr.io/kenchrcum/fluxcd-helm-upgrader:latest
+          image: kenchrcum/fluxcd-helm-upgrader:latest
           imagePullPolicy: IfNotPresent
           env:
             - name: LOG_LEVEL
