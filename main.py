@@ -46,10 +46,10 @@ REPO_CLONE_DIR = os.getenv("REPO_CLONE_DIR", "/tmp/fluxcd-repo").strip()
 
 # SSH key configuration for private repository access
 SSH_PRIVATE_KEY_PATH = os.getenv(
-    "SSH_PRIVATE_KEY_PATH", "/home/app/.ssh/id_rsa"
+    "SSH_PRIVATE_KEY_PATH", "/home/app/.ssh/private_key"
 ).strip()
 SSH_PUBLIC_KEY_PATH = os.getenv(
-    "SSH_PUBLIC_KEY_PATH", "/home/app/.ssh/id_rsa.pub"
+    "SSH_PUBLIC_KEY_PATH", "/home/app/.ssh/public_key"
 ).strip()
 SSH_KNOWN_HOSTS_PATH = os.getenv(
     "SSH_KNOWN_HOSTS_PATH", "/home/app/.ssh/known_hosts"
@@ -69,53 +69,55 @@ def setup_ssh_config() -> bool:
         ssh_dir.mkdir(mode=0o700, exist_ok=True)
         logging.debug("SSH directory ready: %s", ssh_dir)
 
-        # Copy SSH keys if they exist
-        private_key_src = Path(SSH_PRIVATE_KEY_PATH)
-        public_key_src = Path(SSH_PUBLIC_KEY_PATH)
-        known_hosts_src = Path(SSH_KNOWN_HOSTS_PATH)
-
-        private_key_dst = ssh_dir / "id_rsa"
-        public_key_dst = ssh_dir / "id_rsa.pub"
-        known_hosts_dst = ssh_dir / "known_hosts"
+        # Use SSH keys directly from their mounted paths
+        private_key_path = Path(SSH_PRIVATE_KEY_PATH)
+        public_key_path = Path(SSH_PUBLIC_KEY_PATH)
+        known_hosts_path = Path(SSH_KNOWN_HOSTS_PATH)
 
         # Check if SSH keys exist
-        if not private_key_src.exists():
+        if not private_key_path.exists():
             logging.error("SSH private key not found at %s", SSH_PRIVATE_KEY_PATH)
             logging.error(
                 "Make sure the SSH private key file exists and the path is correct"
             )
             return False
 
-        # Copy private key
-        import shutil
+        # Set proper permissions on private key (if writable)
+        try:
+            private_key_path.chmod(0o600)
+        except OSError:
+            # File might be read-only due to mount, log but continue
+            logging.debug("Could not set permissions on private key (likely read-only mount)")
 
-        shutil.copy2(private_key_src, private_key_dst)
-        private_key_dst.chmod(0o600)
-        logging.debug("SSH private key copied to %s", private_key_dst)
+        # Set proper permissions on public key if it exists (if writable)
+        if public_key_path.exists():
+            try:
+                public_key_path.chmod(0o644)
+            except OSError:
+                logging.debug("Could not set permissions on public key (likely read-only mount)")
 
-        # Copy public key if it exists
-        if public_key_src.exists():
-            shutil.copy2(public_key_src, public_key_dst)
-            public_key_dst.chmod(0o644)
-
-        # Copy known_hosts if it exists
-        if known_hosts_src.exists():
-            shutil.copy2(known_hosts_src, known_hosts_dst)
-            known_hosts_dst.chmod(0o644)
+        # Check known_hosts and add GitHub if needed
+        if known_hosts_path.exists():
+            try:
+                known_hosts_path.chmod(0o644)
+            except OSError:
+                logging.debug("Could not set permissions on known_hosts (likely read-only mount)")
         else:
-            # Add GitHub to known hosts if not present
-            github_known_hosts = "github.com ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEAq2A7hRGmdnm9tUDbO9IDSwBK6TbQa+PXYPCPy6rbTrTtw7PHkccKrpp0yVhp5HdEIcKr6pLlVDBfOLX9QUsyCOV0wzfjIJNlGEYsdlLJizHhbn2mUjvSAHQqZETYP81eFzLQNnPHt4EVVUh7VfDESU84KezmD5QlWpXLmvU31/yMf+Se8xhHTvKSCZIFImWwoG6mbUoWf9nzpIoaSjB+weqqUUmpaaasXVal72J+UX2B+2RPW3RcT0eOzQgqlJL3RKrTJvdsjE3JEAvGq3lGHSZXy28G3skua2SmVi/w4yCE6gbODqnTWlg7+wC604ydGXA8VJiS5ap43JXiUFFAaQ=="
-            with open(known_hosts_dst, "a") as f:
-                f.write(github_known_hosts + "\n")
-            known_hosts_dst.chmod(0o644)
-            logging.debug("Added GitHub to known hosts")
+            # Try to create known_hosts with GitHub entry
+            try:
+                github_known_hosts = "github.com ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEAq2A7hRGmdnm9tUDbO9IDSwBK6TbQa+PXYPCPy6rbTrTtw7PHkccKrpp0yVhp5HdEIcKr6pLlVDBfOLX9QUsyCOV0wzfjIJNlGEYsdlLJizHhbn2mUjvSAHQqZETYP81eFzLQNnPHt4EVVUh7VfDESU84KezmD5QlWpXLmvU31/yMf+Se8xhHTvKSCZIFImWwoG6mbUoWf9nzpIoaSjB+weqqUUmpaaasXVal72J+UX2B+2RPW3RcT0eOzQgqlJL3RKrTJvdsjE3JEAvGq3lGHSZXy28G3skua2SmVi/w4yCE6gbODqnTWlg7+wC604ydGXA8VJiS5ap43JXiUFFAaQ=="
+                with open(known_hosts_path, "w") as f:
+                    f.write(github_known_hosts + "\n")
+                known_hosts_path.chmod(0o644)
+                logging.debug("Added GitHub to known hosts")
+            except OSError:
+                logging.warning("Could not create known_hosts file (read-only file system)")
 
-        # Configure git to use SSH with user's SSH directory
-        ssh_dir_str = str(ssh_dir)
+        # Configure git to use SSH with the correct key paths
         env = os.environ.copy()
         env.setdefault(
             "GIT_SSH_COMMAND",
-            f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={ssh_dir_str}/known_hosts -i {ssh_dir_str}/id_rsa",
+            f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={SSH_KNOWN_HOSTS_PATH} -i {SSH_PRIVATE_KEY_PATH}",
         )
 
         return True
@@ -143,11 +145,11 @@ def validate_ssh_access(repo_url: str) -> bool:
         ssh_dir = home_dir / ".ssh"
         ssh_dir_str = str(ssh_dir)
 
-        # Test SSH access with git ls-remote
+        # Test SSH access with git ls-remote using the correct key paths
         env = os.environ.copy()
         env.setdefault(
             "GIT_SSH_COMMAND",
-            f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={ssh_dir_str}/known_hosts -i {ssh_dir_str}/id_rsa",
+            f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={SSH_KNOWN_HOSTS_PATH} -i {SSH_PRIVATE_KEY_PATH}",
         )
 
         result = subprocess.run(
@@ -232,7 +234,7 @@ def _run_git_command(
     ssh_dir_str = str(ssh_dir)
     env.setdefault(
         "GIT_SSH_COMMAND",
-        f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={ssh_dir_str}/known_hosts -i {ssh_dir_str}/id_rsa",
+        f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={SSH_KNOWN_HOSTS_PATH} -i {SSH_PRIVATE_KEY_PATH}",
     )
     base_cmd = ["git"]
     base_cmd += ["-c", "credential.helper="]  # Disable credential helpers
