@@ -1,25 +1,61 @@
 # syntax=docker/dockerfile:1
-FROM python:3.12-slim
 
+# Build stage
+FROM alpine:3.22.1 AS builder
+
+# Install Python and build dependencies
+RUN apk add --no-cache \
+    python3 \
+    py3-pip \
+    python3-dev \
+    build-base \
+    libffi-dev \
+    openssl-dev \
+    git \
+    ca-certificates \
+    curl
+
+# Create virtual environment
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Runtime stage
+FROM alpine:3.22.1
+
+# Install only runtime dependencies
+RUN apk add --no-cache \
+    python3 \
+    ca-certificates \
+    curl \
+    git \
+    openssh-client \
+    && rm -rf /var/cache/apk/*
+
+# Copy virtual environment from builder stage
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Set Python environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
-
-# Install runtime deps for kubernetes client (openssh for git if needed later)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git && \
-    rm -rf /var/lib/apt/lists/*
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
-COPY requirements.txt ./
-RUN pip install -r requirements.txt
 
+# Copy application code
 COPY main.py ./
 
-# Non-root user
-RUN useradd -u 10001 -r -g root -s /sbin/nologin -M appuser && chown -R appuser:root /app
+# Create non-root user and set permissions
+RUN addgroup -g 10001 -S appuser && \
+    adduser -u 10001 -S appuser -G appuser && \
+    chown -R appuser:appuser /app
+
 USER appuser
 
+# Application environment variables
 ENV INTERVAL_SECONDS=300 \
     LOG_LEVEL=INFO \
     INCLUDE_PRERELEASE=false
