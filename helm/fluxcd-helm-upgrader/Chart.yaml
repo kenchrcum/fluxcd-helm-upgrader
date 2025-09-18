@@ -1,6 +1,6 @@
 apiVersion: v2
 name: fluxcd-helm-upgrader
-description: Periodically checks FluxCD HelmReleases and logs if newer chart versions are available
+description: Periodically checks FluxCD HelmReleases and logs if newer chart versions are available. Supports both continuous operation (Deployment) and scheduled execution (CronJob).
 home: https://github.com/kenchrcum/fluxcd-helm-upgrader
 sources:
   - https://github.com/kenchrcum/fluxcd-helm-upgrader

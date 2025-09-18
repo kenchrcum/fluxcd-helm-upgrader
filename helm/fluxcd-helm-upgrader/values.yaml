@@ -3,7 +3,30 @@ image:
   tag: "0.2.0"
   pullPolicy: IfNotPresent
 
+# Deployment mode: "deployment" for continuous operation, "cronjob" for scheduled execution
+mode: deployment
+
+# Deployment configuration (used when mode=deployment)
 replicaCount: 1
+
+# CronJob configuration (used when mode=cronjob)
+cronjob:
+  # Schedule in cron format (e.g., "0 */6 * * *" for every 6 hours)
+  schedule: "0 */6 * * *"
+  # How to handle concurrent executions
+  concurrencyPolicy: Forbid  # Options: Allow, Forbid, Replace
+  # Number of successful finished jobs to retain
+  successfulJobsHistoryLimit: 3
+  # Number of failed finished jobs to retain
+  failedJobsHistoryLimit: 1
+  # Optional: Deadline in seconds for starting the job if it misses scheduled time
+  startingDeadlineSeconds: 300
+  # Optional: Suspend the cron job
+  suspend: false
+  # Optional: Deadline in seconds for the job execution
+  activeDeadlineSeconds: 3600  # 1 hour timeout
+  # Optional: Number of retries before marking job as failed
+  backoffLimit: 3
 
 resources:
   limits:

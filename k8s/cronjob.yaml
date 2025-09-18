@@ -1,0 +1,159 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: fluxcd-helm-upgrader
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/name: fluxcd-helm-upgrader
+    app.kubernetes.io/component: upgrader
+    app.kubernetes.io/part-of: flux
+spec:
+  # Run every 6 hours
+  schedule: "0 */6 * * *"
+  # Don't allow concurrent executions
+  concurrencyPolicy: Forbid
+  # Keep last 3 successful job logs
+  successfulJobsHistoryLimit: 3
+  # Keep last 1 failed job log
+  failedJobsHistoryLimit: 1
+  # Allow 5 minutes for job to start if it misses its scheduled time
+  startingDeadlineSeconds: 300
+  jobTemplate:
+    spec:
+      # Maximum 1 hour for job execution
+      activeDeadlineSeconds: 3600
+      # Retry up to 2 times on failure
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: fluxcd-helm-upgrader
+            app.kubernetes.io/component: upgrader
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: fluxcd-helm-upgrader
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+          containers:
+            - name: upgrader
+              image: kenchrcum/fluxcd-helm-upgrader:latest
+              imagePullPolicy: IfNotPresent
+              env:
+                # Enable single-run mode for CronJob
+                - name: RUN_MODE
+                  value: "once"
+                - name: LOG_LEVEL
+                  value: "INFO"
+                - name: INCLUDE_PRERELEASE
+                  value: "false"
+                
+                # Git repository configuration
+                - name: REPO_URL
+                  value: "git@github.com:your-org/flux-config.git"
+                - name: REPO_BRANCH
+                  value: "main"
+                - name: REPO_SEARCH_PATTERN
+                  value: "/clusters/*/flux-system/helmrelease*.y*ml;/apps/*/*/helmrelease*.y*ml"
+                - name: REPO_CLONE_DIR
+                  value: "/tmp/fluxcd-repo"
+                
+                # SSH configuration
+                - name: SSH_PRIVATE_KEY_PATH
+                  value: "/home/app/.ssh/private_key"
+                - name: SSH_PUBLIC_KEY_PATH
+                  value: "/home/app/.ssh/public_key"
+                - name: SSH_KNOWN_HOSTS_PATH
+                  value: "/home/app/.ssh/known_hosts"
+                
+                # GitHub integration
+                - name: GITHUB_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: github-token
+                      key: token
+                - name: GITHUB_REPOSITORY
+                  value: "your-org/flux-config"
+                - name: GITHUB_DEFAULT_BRANCH
+                  value: "main"
+                
+                # Git commit configuration
+                - name: GIT_USER_NAME
+                  value: "fluxcd-helm-upgrader-bot"
+                - name: GIT_USER_EMAIL
+                  value: "fluxcd-helm-upgrader@your-org.com"
+                - name: GIT_FORCE_PUSH
+                  value: "false"
+              
+              volumeMounts:
+                - name: ssh-keys
+                  mountPath: /home/app/.ssh
+                  readOnly: true
+              
+              resources:
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+          
+          volumes:
+            - name: ssh-keys
+              secret:
+                secretName: flux-ssh-key
+                items:
+                  - key: identity
+                    path: private_key
+                  - key: identity.pub
+                    path: public_key
+                  - key: known_hosts
+                    path: known_hosts
+---
+# ServiceAccount for the CronJob
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fluxcd-helm-upgrader
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/name: fluxcd-helm-upgrader
+    app.kubernetes.io/component: upgrader
+    app.kubernetes.io/part-of: flux
+---
+# ClusterRole for accessing HelmReleases and HelmRepositories
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: fluxcd-helm-upgrader
+  labels:
+    app.kubernetes.io/name: fluxcd-helm-upgrader
+    app.kubernetes.io/component: upgrader
+    app.kubernetes.io/part-of: flux
+rules:
+  - apiGroups: ["helm.toolkit.fluxcd.io"]
+    resources: ["helmreleases"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["source.toolkit.fluxcd.io"]
+    resources: ["helmrepositories", "helmcharts"]
+    verbs: ["get", "list", "watch"]
+---
+# ClusterRoleBinding to bind the ServiceAccount to the ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: fluxcd-helm-upgrader
+  labels:
+    app.kubernetes.io/name: fluxcd-helm-upgrader
+    app.kubernetes.io/component: upgrader
+    app.kubernetes.io/part-of: flux
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: fluxcd-helm-upgrader
+subjects:
+  - kind: ServiceAccount
+    name: fluxcd-helm-upgrader
+    namespace: flux-system

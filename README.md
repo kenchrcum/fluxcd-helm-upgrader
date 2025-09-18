@@ -283,6 +283,99 @@ No changes to commit (manifest may already be up to date)
 🎉 Successfully created PR for harbor/harbor: https://github.com/your-org/flux-infra/pull/123
 ```
 
+## Deployment Modes
+
+The FluxCD Helm Upgrader supports two deployment modes:
+
+### Deployment Mode (Default)
+
+In deployment mode, the upgrader runs continuously as a Kubernetes Deployment with a configurable interval between checks. This is the default mode and is suitable for most use cases.
+
+```yaml
+# values.yaml
+mode: deployment
+replicaCount: 1
+intervalSeconds: 300  # Check every 5 minutes
+```
+
+### CronJob Mode
+
+In CronJob mode, the upgrader runs as scheduled Kubernetes Jobs, which is more resource-efficient as pods are only created when needed. This mode is ideal for environments where:
+
+- Resources are constrained
+- Updates are needed less frequently
+- You prefer scheduled execution over continuous monitoring
+
+#### Using CronJob Mode with Helm
+
+```bash
+# Install with CronJob mode (runs every 6 hours)
+helm install fluxcd-helm-upgrader ./helm/fluxcd-helm-upgrader \
+  --set mode=cronjob \
+  --set cronjob.schedule="0 */6 * * *" \
+  --set repo.url="git@github.com:your-org/flux-config.git" \
+  --set github.token="your-github-token" \
+  --set github.repository="your-org/flux-config"
+```
+
+#### CronJob Configuration Options
+
+```yaml
+# values.yaml
+mode: cronjob
+
+cronjob:
+  # Schedule in cron format (every 6 hours at minute 0)
+  schedule: "0 */6 * * *"
+  
+  # Concurrency policy: Forbid, Allow, or Replace
+  concurrencyPolicy: Forbid
+  
+  # Job history limits
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  
+  # Deadlines and timeouts
+  startingDeadlineSeconds: 300    # 5 minutes to start
+  activeDeadlineSeconds: 3600     # 1 hour max execution
+  
+  # Retry configuration
+  backoffLimit: 3                 # Retry up to 3 times
+  
+  # Optional: Suspend the cron job
+  suspend: false
+```
+
+#### Using Standalone CronJob Manifest
+
+For environments not using Helm, you can deploy the CronJob directly:
+
+```bash
+# Apply the standalone CronJob manifest
+kubectl apply -f k8s/cronjob.yaml
+
+# Don't forget to create the required secrets:
+# 1. SSH key secret (if using private repositories)
+kubectl create secret generic flux-ssh-key \
+  --from-file=identity=/path/to/private/key \
+  --from-file=identity.pub=/path/to/public/key \
+  --from-file=known_hosts=/path/to/known_hosts \
+  -n flux-system
+
+# 2. GitHub token secret (if using GitHub integration)
+kubectl create secret generic github-token \
+  --from-literal=token=your-github-token \
+  -n flux-system
+```
+
+#### Common CronJob Schedules
+
+- `"0 */6 * * *"` - Every 6 hours
+- `"0 0 * * *"` - Daily at midnight
+- `"0 0 * * 1"` - Weekly on Mondays at midnight
+- `"0 9,17 * * 1-5"` - Twice daily (9 AM and 5 PM) on weekdays
+- `"*/30 * * * *"` - Every 30 minutes
+
 ## Project Structure
 
 ```
@@ -294,7 +387,8 @@ No changes to commit (manifest may already be up to date)
 ├── .gitignore                          # Git ignore patterns
 ├── k8s/                                # Raw Kubernetes manifests
 │   ├── rbac.yaml                       # Cluster-wide RBAC configuration
-│   └── deployment.yaml                 # Deployment manifest
+│   ├── deployment.yaml                 # Deployment manifest
+│   └── cronjob.yaml                    # CronJob manifest
 ├── helm/                               # Helm chart
 │   └── fluxcd-helm-upgrader/
 │       ├── Chart.yaml                  # Helm chart metadata
@@ -307,10 +401,12 @@ No changes to commit (manifest may already be up to date)
 │       │   ├── clusterrolebinding.yaml # Cluster role binding template
 │       │   ├── role.yaml               # Namespaced role template
 │       │   ├── rolebinding.yaml        # Namespaced role binding template
-│       │   └── deployment.yaml         # Deployment template
+│       │   ├── deployment.yaml         # Deployment template
+│       │   └── cronjob.yaml            # CronJob template
 │       └── README.md                   # Helm chart documentation
 ├── examples/                           # Sample configurations
-│   └── sample-values.yaml              # Sample Helm values
+│   ├── sample-values.yaml              # Sample Helm values
+│   └── cronjob-values.yaml             # Sample CronJob configuration
 ├── build.sh                           # Build script for Docker images
 └── deploy.sh                         # Deployment script
 ```
@@ -324,7 +420,16 @@ No changes to commit (manifest may already be up to date)
 | `image.repository` | Docker image repository | `ghcr.io/kenchrcum/fluxcd-helm-upgrader` |
 | `image.tag` | Docker image tag | `0.2.0` |
 | `image.pullPolicy` | Image pull policy | `IfNotPresent` |
-| `replicaCount` | Number of replicas | `1` |
+| `mode` | Deployment mode: `deployment` or `cronjob` | `deployment` |
+| `replicaCount` | Number of replicas (deployment mode only) | `1` |
+| `cronjob.schedule` | Cron schedule for job execution | `0 */6 * * *` |
+| `cronjob.concurrencyPolicy` | How to handle concurrent executions | `Forbid` |
+| `cronjob.successfulJobsHistoryLimit` | Number of successful jobs to retain | `3` |
+| `cronjob.failedJobsHistoryLimit` | Number of failed jobs to retain | `1` |
+| `cronjob.startingDeadlineSeconds` | Deadline for starting missed jobs | `300` |
+| `cronjob.suspend` | Suspend the cron job | `false` |
+| `cronjob.activeDeadlineSeconds` | Maximum job execution time | `3600` |
+| `cronjob.backoffLimit` | Number of retries on failure | `3` |
 | `repo.url` | Git repository URL to scan for manifests | `""` |
 | `repo.branch` | Git branch to scan | `""` |
 | `repo.searchPattern` | Glob pattern for finding HelmRelease manifests | `/components/{namespace}/*/helmrelease*.y*ml` |
@@ -359,6 +464,7 @@ No changes to commit (manifest may already be up to date)
 
 ### Environment Variables
 
+- `RUN_MODE`: Execution mode: `continuous` (default) or `once` for single-run mode
 - `LOG_LEVEL`: Logging level (DEBUG, INFO, WARNING, ERROR) (default: INFO)
 - `INTERVAL_SECONDS`: Check interval in seconds (default: 300)
 - `INCLUDE_PRERELEASE`: Include pre-release versions in checks (default: false)

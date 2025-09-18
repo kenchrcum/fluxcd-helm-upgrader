@@ -1,0 +1,84 @@
+# Example values for deploying as CronJob instead of Deployment
+# This configuration runs the helm upgrader every 6 hours instead of continuously
+
+# Switch to CronJob mode
+mode: cronjob
+
+# CronJob configuration
+cronjob:
+  # Run every 6 hours at minute 0
+  schedule: "0 */6 * * *"
+  # Don't allow concurrent executions
+  concurrencyPolicy: Forbid
+  # Keep last 3 successful job logs
+  successfulJobsHistoryLimit: 3
+  # Keep last 1 failed job log
+  failedJobsHistoryLimit: 1
+  # Allow 5 minutes for job to start if it misses its scheduled time
+  startingDeadlineSeconds: 300
+  # Don't suspend the cron job
+  suspend: false
+  # Maximum 1 hour for job execution
+  activeDeadlineSeconds: 3600
+  # Retry up to 2 times on failure
+  backoffLimit: 2
+
+# Application configuration
+logLevel: INFO
+includePrerelease: false
+
+# Git repository configuration
+repo:
+  url: "git@github.com:your-org/flux-config.git"
+  branch: "main"
+  searchPattern: "/clusters/*/flux-system/helmrelease*.y*ml;/apps/*/*/helmrelease*.y*ml"
+  cloneDir: "/tmp/fluxcd-repo"
+  
+  # SSH key authentication
+  sshKeySecret:
+    enabled: true
+    name: "flux-ssh-key"
+    privateKey: "identity"
+    publicKey: "identity.pub"
+    knownHosts: "known_hosts"
+
+# GitHub integration for PR creation
+github:
+  token: "ghp_your_github_token_here"
+  repository: "your-org/flux-config"
+  defaultBranch: "main"
+
+# Git configuration for commits
+git:
+  userName: "fluxcd-helm-upgrader-bot"
+  userEmail: "fluxcd-helm-upgrader@your-org.com"
+  forcePush: false
+
+# Resource limits for CronJob pods
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# Service account and RBAC
+serviceAccount:
+  create: true
+  name: ""
+
+rbac:
+  create: true
+  clusterWide: true
+
+# Optional: Node selection, tolerations, and affinity
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Optional: Pod annotations
+podAnnotations:
+  # Example: Add Prometheus scraping annotations
+  # prometheus.io/scrape: "true"
+  # prometheus.io/port: "8080"

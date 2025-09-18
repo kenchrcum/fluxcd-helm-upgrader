@@ -1842,11 +1842,18 @@ def main() -> None:
     coapi = load_kube_config()
     interval = Config.DEFAULT_INTERVAL_SECONDS
     
+    # Check if running in single-run mode (for CronJob)
+    run_mode = os.getenv("RUN_MODE", "continuous").lower()
+    
     # Initialize GitHub manager once
     github_manager = GitHubManager()
 
     # Log configuration once at startup
-    logging.info("🚀 Starting FluxCD Helm upgrader v0.2.0 (interval: %ss)", interval)
+    if run_mode == "once":
+        logging.info("🚀 Starting FluxCD Helm upgrader v0.2.0 (single-run mode)")
+    else:
+        logging.info("🚀 Starting FluxCD Helm upgrader v0.2.0 (continuous mode, interval: %ss)", interval)
+    
     if Config.REPO_URL:
         logging.info("📂 Repository: %s", Config.REPO_URL)
         logging.info("🔑 SSH Keys: %s, %s", Config.SSH_PRIVATE_KEY_PATH, Config.SSH_PUBLIC_KEY_PATH)
@@ -1860,6 +1867,21 @@ def main() -> None:
         logging.info("📂 No repository URL configured - only cluster scanning enabled")
     
     cycle_count = 0
+    
+    # Single-run mode for CronJob
+    if run_mode == "once":
+        logging.info("🔄 Starting single check run...")
+        try:
+            check_once(coapi)
+            logging.info("✅ Single check run completed successfully")
+        except Exception:
+            logging.exception("❌ Unexpected failure during single check run")
+            exit(1)  # Exit with error code for CronJob failure tracking
+        finally:
+            clear_caches()  # Clean up before exit
+        return
+    
+    # Continuous mode for Deployment (original behavior)
     while True:
         cycle_count += 1
         logging.info("🔄 Starting check cycle #%d...", cycle_count)

@@ -1,0 +1,127 @@
+{{- if eq .Values.mode "cronjob" }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "fluxcd-helm-upgrader.fullname" . }}
+  labels:
+    {{- include "fluxcd-helm-upgrader.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.cronjob.schedule | quote }}
+  concurrencyPolicy: {{ .Values.cronjob.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ .Values.cronjob.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.cronjob.failedJobsHistoryLimit }}
+  {{- if .Values.cronjob.startingDeadlineSeconds }}
+  startingDeadlineSeconds: {{ .Values.cronjob.startingDeadlineSeconds }}
+  {{- end }}
+  {{- if .Values.cronjob.suspend }}
+  suspend: {{ .Values.cronjob.suspend }}
+  {{- end }}
+  jobTemplate:
+    spec:
+      {{- if .Values.cronjob.activeDeadlineSeconds }}
+      activeDeadlineSeconds: {{ .Values.cronjob.activeDeadlineSeconds }}
+      {{- end }}
+      {{- if .Values.cronjob.backoffLimit }}
+      backoffLimit: {{ .Values.cronjob.backoffLimit }}
+      {{- end }}
+      template:
+        metadata:
+          labels:
+            {{- include "fluxcd-helm-upgrader.labels" . | nindent 12 }}
+          {{- with .Values.podAnnotations }}
+          annotations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: {{ default (include "fluxcd-helm-upgrader.fullname" .) .Values.serviceAccount.name }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+          containers:
+            - name: app
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              env:
+                - name: RUN_MODE
+                  value: "once"
+                - name: LOG_LEVEL
+                  value: {{ .Values.logLevel | quote }}
+                - name: INTERVAL_SECONDS
+                  value: {{ .Values.intervalSeconds | quote }}
+                - name: INCLUDE_PRERELEASE
+                  value: {{ .Values.includePrerelease | quote }}
+                - name: REPO_URL
+                  value: {{ .Values.repo.url | quote }}
+                - name: REPO_BRANCH
+                  value: {{ .Values.repo.branch | quote }}
+                - name: REPO_SEARCH_PATTERN
+                  value: {{ .Values.repo.searchPattern | quote }}
+                - name: REPO_CLONE_DIR
+                  value: {{ .Values.repo.cloneDir | quote }}
+                {{- if and .Values.repo.sshKeySecret.enabled .Values.repo.sshKeySecret.name }}
+                - name: SSH_PRIVATE_KEY_PATH
+                  value: "/home/app/.ssh/private_key"
+                - name: SSH_PUBLIC_KEY_PATH
+                  value: "/home/app/.ssh/public_key"
+                - name: SSH_KNOWN_HOSTS_PATH
+                  value: "/home/app/.ssh/known_hosts"
+                {{- end }}
+                {{- if .Values.github.token }}
+                - name: GITHUB_TOKEN
+                  value: {{ .Values.github.token | quote }}
+                {{- end }}
+                {{- if .Values.github.repository }}
+                - name: GITHUB_REPOSITORY
+                  value: {{ .Values.github.repository | quote }}
+                {{- end }}
+                {{- if .Values.github.defaultBranch }}
+                - name: GITHUB_DEFAULT_BRANCH
+                  value: {{ .Values.github.defaultBranch | quote }}
+                {{- end }}
+                {{- if .Values.git.userName }}
+                - name: GIT_USER_NAME
+                  value: {{ .Values.git.userName | quote }}
+                {{- end }}
+                {{- if .Values.git.userEmail }}
+                - name: GIT_USER_EMAIL
+                  value: {{ .Values.git.userEmail | quote }}
+                {{- end }}
+                {{- if .Values.git.forcePush }}
+                - name: GIT_FORCE_PUSH
+                  value: {{ .Values.git.forcePush | quote }}
+                {{- end }}
+              volumeMounts:
+                {{- if and .Values.repo.sshKeySecret.enabled .Values.repo.sshKeySecret.name }}
+                - name: ssh-keys
+                  mountPath: /home/app/.ssh
+                  readOnly: true
+                {{- end }}
+              resources:
+                {{- toYaml .Values.resources | nindent 16 }}
+          volumes:
+            {{- if and .Values.repo.sshKeySecret.enabled .Values.repo.sshKeySecret.name }}
+            - name: ssh-keys
+              secret:
+                secretName: {{ .Values.repo.sshKeySecret.name }}
+                items:
+                  - key: {{ .Values.repo.sshKeySecret.privateKey }}
+                    path: private_key
+                  {{- if .Values.repo.sshKeySecret.publicKey }}
+                  - key: {{ .Values.repo.sshKeySecret.publicKey }}
+                    path: public_key
+                  {{- end }}
+                  {{- if .Values.repo.sshKeySecret.knownHosts }}
+                  - key: {{ .Values.repo.sshKeySecret.knownHosts }}
+                    path: known_hosts
+                  {{- end }}
+            {{- end }}
+          nodeSelector:
+            {{- toYaml .Values.nodeSelector | nindent 12 }}
+          tolerations:
+            {{- toYaml .Values.tolerations | nindent 12 }}
+          affinity:
+            {{- toYaml .Values.affinity | nindent 12 }}
+{{- end }}
