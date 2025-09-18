@@ -175,12 +175,6 @@ def setup_ssh_config() -> bool:
                     logging.warning("This can cause SSH authentication to fail")
                     logging.info("Consider adding a newline at the end of your SSH key in Vault")
 
-                # Check for missing trailing newline (common Vault issue)
-                if not key_content.endswith('\n'):
-                    logging.warning("SSH private key is missing trailing newline")
-                    logging.warning("This is a common issue when storing SSH keys in secret management systems")
-                    logging.info("Add '\\n' to the end of your SSH key value in Vault")
-
             logging.debug("SSH private key format validation passed")
 
         except Exception as e:
