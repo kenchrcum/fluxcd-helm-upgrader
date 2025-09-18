@@ -14,6 +14,7 @@ import semver
 import re
 from kubernetes import client, config
 from kubernetes.client import ApiException
+from github import Github, GithubException
 
 
 HELM_RELEASE_GROUP = "helm.toolkit.fluxcd.io"
@@ -55,6 +56,19 @@ SSH_KNOWN_HOSTS_PATH = os.getenv(
     "SSH_KNOWN_HOSTS_PATH", "/home/app/.ssh/known_hosts"
 ).strip()
 
+# GitHub configuration for Pull Request creation
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
+GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "").strip()  # Format: owner/repo
+GITHUB_DEFAULT_BRANCH = os.getenv(
+    "GITHUB_DEFAULT_BRANCH", ""
+).strip()  # Override default branch detection
+GIT_FORCE_PUSH = os.getenv("GIT_FORCE_PUSH", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)  # Force push when branch exists
+
 
 def validate_ssh_key_loading(private_key_path: str) -> bool:
     """Test if SSH private key can be loaded by ssh-keygen."""
@@ -76,13 +90,16 @@ def validate_ssh_key_loading(private_key_path: str) -> bool:
 
         # Check if file is readable
         try:
-            with open(private_key_path, 'r') as f:
+            with open(private_key_path, "r") as f:
                 content = f.read()
                 if not content.strip():
                     logging.error("SSH private key file is empty: %s", private_key_path)
                     return False
         except PermissionError:
-            logging.error("Cannot read SSH private key file (permission denied): %s", private_key_path)
+            logging.error(
+                "Cannot read SSH private key file (permission denied): %s",
+                private_key_path,
+            )
             return False
         except Exception as e:
             logging.error("Error reading SSH private key file: %s", str(e))
@@ -147,33 +164,41 @@ def setup_ssh_config() -> bool:
 
         # Validate SSH private key format
         try:
-            with open(private_key_path, 'r') as f:
+            with open(private_key_path, "r") as f:
                 key_content = f.read().strip()
                 if not key_content:
                     logging.error("SSH private key file is empty")
                     return False
 
                 # Check if it's a valid SSH private key format
-                if not (key_content.startswith('-----BEGIN OPENSSH PRIVATE KEY-----') or
-                        key_content.startswith('-----BEGIN RSA PRIVATE KEY-----') or
-                        key_content.startswith('-----BEGIN EC PRIVATE KEY-----') or
-                        key_content.startswith('-----BEGIN PRIVATE KEY-----')):
+                if not (
+                    key_content.startswith("-----BEGIN OPENSSH PRIVATE KEY-----")
+                    or key_content.startswith("-----BEGIN RSA PRIVATE KEY-----")
+                    or key_content.startswith("-----BEGIN EC PRIVATE KEY-----")
+                    or key_content.startswith("-----BEGIN PRIVATE KEY-----")
+                ):
                     logging.error("SSH private key is not in a recognized format")
                     logging.error("Supported formats: OpenSSH, RSA, ECDSA, or PKCS#8")
-                    logging.error("You may need to convert your key using: ssh-keygen -p -f key_file -m pem")
+                    logging.error(
+                        "You may need to convert your key using: ssh-keygen -p -f key_file -m pem"
+                    )
                     return False
 
-                if not (key_content.endswith('-----END OPENSSH PRIVATE KEY-----\n') or
-                        key_content.endswith('-----END RSA PRIVATE KEY-----\n') or
-                        key_content.endswith('-----END EC PRIVATE KEY-----\n') or
-                        key_content.endswith('-----END PRIVATE KEY-----\n') or
-                        key_content.endswith('-----END OPENSSH PRIVATE KEY-----') or
-                        key_content.endswith('-----END RSA PRIVATE KEY-----') or
-                        key_content.endswith('-----END EC PRIVATE KEY-----') or
-                        key_content.endswith('-----END PRIVATE KEY-----')):
+                if not (
+                    key_content.endswith("-----END OPENSSH PRIVATE KEY-----\n")
+                    or key_content.endswith("-----END RSA PRIVATE KEY-----\n")
+                    or key_content.endswith("-----END EC PRIVATE KEY-----\n")
+                    or key_content.endswith("-----END PRIVATE KEY-----\n")
+                    or key_content.endswith("-----END OPENSSH PRIVATE KEY-----")
+                    or key_content.endswith("-----END RSA PRIVATE KEY-----")
+                    or key_content.endswith("-----END EC PRIVATE KEY-----")
+                    or key_content.endswith("-----END PRIVATE KEY-----")
+                ):
                     logging.warning("SSH private key may be missing trailing newline")
                     logging.warning("This can cause SSH authentication to fail")
-                    logging.info("Consider adding a newline at the end of your SSH key in Vault")
+                    logging.info(
+                        "Consider adding a newline at the end of your SSH key in Vault"
+                    )
 
             logging.debug("SSH private key format validation passed")
 
@@ -190,21 +215,27 @@ def setup_ssh_config() -> bool:
             private_key_path.chmod(0o600)
         except OSError:
             # File might be read-only due to mount, log but continue
-            logging.debug("Could not set permissions on private key (likely read-only mount)")
+            logging.debug(
+                "Could not set permissions on private key (likely read-only mount)"
+            )
 
         # Set proper permissions on public key if it exists (if writable)
         if public_key_path.exists():
             try:
                 public_key_path.chmod(0o644)
             except OSError:
-                logging.debug("Could not set permissions on public key (likely read-only mount)")
+                logging.debug(
+                    "Could not set permissions on public key (likely read-only mount)"
+                )
 
         # Check known_hosts and add GitHub if needed
         if known_hosts_path.exists():
             try:
                 known_hosts_path.chmod(0o644)
             except OSError:
-                logging.debug("Could not set permissions on known_hosts (likely read-only mount)")
+                logging.debug(
+                    "Could not set permissions on known_hosts (likely read-only mount)"
+                )
         else:
             # Try to create known_hosts with GitHub entry
             try:
@@ -214,7 +245,9 @@ def setup_ssh_config() -> bool:
                 known_hosts_path.chmod(0o644)
                 logging.debug("Added GitHub to known hosts")
             except OSError:
-                logging.warning("Could not create known_hosts file (read-only file system)")
+                logging.warning(
+                    "Could not create known_hosts file (read-only file system)"
+                )
 
         # Configure git to use SSH with the correct key paths
         env = os.environ.copy()
@@ -273,16 +306,24 @@ def validate_ssh_access(repo_url: str) -> bool:
             # Provide specific guidance based on error type
             if "Load key" in stderr_output and "error in libcrypto" in stderr_output:
                 logging.error("SSH key format issue detected. Common solutions:")
-                logging.error("1. Convert PKCS#8 format to PEM: openssl rsa -in key.pem -out key.pem")
-                logging.error("2. Convert to OpenSSH format: ssh-keygen -p -f key_file -m pem")
-                logging.error("3. Regenerate key: ssh-keygen -t rsa -b 4096 -C 'flux-deploy-key'")
+                logging.error(
+                    "1. Convert PKCS#8 format to PEM: openssl rsa -in key.pem -out key.pem"
+                )
+                logging.error(
+                    "2. Convert to OpenSSH format: ssh-keygen -p -f key_file -m pem"
+                )
+                logging.error(
+                    "3. Regenerate key: ssh-keygen -t rsa -b 4096 -C 'flux-deploy-key'"
+                )
             elif "Permission denied" in stderr_output:
                 logging.error("SSH authentication failed. Check:")
                 logging.error("1. SSH key has correct permissions in repository")
                 logging.error("2. SSH key is added to repository deploy keys")
                 logging.error("3. Repository URL format is correct")
             elif "Could not resolve hostname" in stderr_output:
-                logging.error("DNS/Network issue. Check internet connectivity and DNS resolution")
+                logging.error(
+                    "DNS/Network issue. Check internet connectivity and DNS resolution"
+                )
 
             return False
 
@@ -319,6 +360,91 @@ def configure_logging() -> None:
         level=log_level,
         format="%(asctime)s %(levelname)s %(message)s",
     )
+
+
+def validate_github_setup(github_client: Github) -> bool:
+    """Validate GitHub token permissions and repository access."""
+    if not GITHUB_REPOSITORY:
+        logging.warning("GITHUB_REPOSITORY not configured")
+        return False
+
+    try:
+        owner, repo_name = GITHUB_REPOSITORY.split("/", 1)
+        repo = github_client.get_repo(f"{owner}/{repo_name}")
+        logging.debug("✅ Repository access validated: %s/%s", owner, repo_name)
+
+        # Check if we can read repository info
+        default_branch = repo.default_branch
+        if default_branch:
+            logging.debug("✅ Can read repository default branch: %s", default_branch)
+        else:
+            logging.warning("⚠️  Cannot read repository default branch")
+
+        # Check if we can read branches (this tests more permissions)
+        try:
+            branches = repo.get_branches()
+            logging.debug("✅ Can read repository branches")
+        except GithubException as e:
+            if e.status == 403:
+                logging.warning(
+                    "⚠️  GitHub token lacks permission to read repository branches"
+                )
+                logging.warning(
+                    "   This may cause issues with PR creation, but will fallback to defaults"
+                )
+            else:
+                logging.warning("⚠️  Cannot read repository branches: %s", str(e))
+
+        return True
+    except GithubException as e:
+        if e.status == 403:
+            logging.error(
+                "❌ GitHub token lacks permission to access repository %s",
+                GITHUB_REPOSITORY,
+            )
+            logging.error("   Please ensure the token has 'repo' permissions")
+        elif e.status == 404:
+            logging.error(
+                "❌ Repository %s not found or not accessible", GITHUB_REPOSITORY
+            )
+            logging.error("   Please verify the repository exists and is accessible")
+        else:
+            logging.error("❌ Failed to validate repository access: %s", str(e))
+        return False
+    except Exception as e:
+        logging.error("❌ Unexpected error validating GitHub setup: %s", str(e))
+        return False
+
+
+def create_github_client() -> Optional[Github]:
+    """Create and return a GitHub client if token is available."""
+    if not GITHUB_TOKEN:
+        logging.debug("No GitHub token provided, GitHub integration disabled")
+        return None
+
+    try:
+        from github import Auth
+
+        # Use the new authentication method to avoid deprecation warning
+        auth = Auth.Token(GITHUB_TOKEN)
+        g = Github(auth=auth)
+        # Test the connection by getting user info
+        user = g.get_user()
+        logging.info("✅ Connected to GitHub as: %s", user.login)
+
+        # Validate GitHub setup
+        if not validate_github_setup(g):
+            logging.warning(
+                "⚠️  GitHub setup validation failed, PR creation may not work properly"
+            )
+
+        return g
+    except GithubException as e:
+        logging.error("❌ Failed to authenticate with GitHub: %s", str(e))
+        return None
+    except Exception as e:
+        logging.error("❌ Unexpected error connecting to GitHub: %s", str(e))
+        return None
 
 
 def load_kube_config() -> client.CustomObjectsApi:
@@ -374,6 +500,602 @@ def _run_git_command(
         env=env,
     )
     return proc.returncode, proc.stdout, proc.stderr
+
+
+def create_update_branch(
+    repo_dir: str, namespace: str, name: str, new_version: str
+) -> Optional[str]:
+    """Create a new branch for the HelmRelease update, or reuse existing remote branch."""
+    try:
+        # Generate branch name
+        branch_name = f"update-{namespace}-{name}-{new_version}".replace(".", "-")
+
+        # First check if remote branch exists
+        if check_branch_exists_on_remote(repo_dir, branch_name):
+            logging.info(
+                "🔄 Remote branch %s already exists, checking it out", branch_name
+            )
+
+            # Try multiple approaches to fetch and checkout the remote branch
+            success = False
+
+            # Approach 1: Fetch the specific branch directly
+            code, out, err = _run_git_command(
+                ["fetch", "origin", f"{branch_name}:{branch_name}"], cwd=repo_dir
+            )
+            if code == 0:
+                logging.debug("Successfully fetched branch %s directly", branch_name)
+                # Successfully fetched the branch, now we can checkout locally
+                code, out, err = _run_git_command(
+                    ["checkout", branch_name], cwd=repo_dir
+                )
+                if code == 0:
+                    success = True
+                    logging.debug(
+                        "Successfully checked out fetched branch %s", branch_name
+                    )
+                else:
+                    logging.debug(
+                        "Failed to checkout fetched branch %s: %s",
+                        branch_name,
+                        err.strip(),
+                    )
+            else:
+                logging.debug("Direct branch fetch failed: %s", err.strip())
+
+            # Approach 2: If direct fetch failed, try general fetch + checkout
+            if not success:
+                code, out, err = _run_git_command(["fetch", "origin"], cwd=repo_dir)
+                if code != 0:
+                    logging.warning("Failed to fetch from origin: %s", err.strip())
+
+                # Check if we already have a local branch with this name
+                if check_branch_exists_locally(repo_dir, branch_name):
+                    # Local branch exists, just checkout and pull latest
+                    code, out, err = _run_git_command(
+                        ["checkout", branch_name], cwd=repo_dir
+                    )
+                    if code == 0:
+                        success = True
+                        # Pull latest changes from remote
+                        code, out, err = _run_git_command(
+                            ["pull", "origin", branch_name], cwd=repo_dir
+                        )
+                        if code != 0:
+                            logging.warning(
+                                "Failed to pull latest changes for branch %s: %s",
+                                branch_name,
+                                err.strip(),
+                            )
+                            # Continue anyway, we're on the branch
+                    else:
+                        logging.debug(
+                            "Failed to checkout existing local branch %s: %s",
+                            branch_name,
+                            err.strip(),
+                        )
+
+                # Approach 3: Create local branch from remote reference
+                if not success:
+                    # Try to checkout the remote branch using the remote reference directly
+                    code, out, err = _run_git_command(
+                        [
+                            "checkout",
+                            "-b",
+                            branch_name,
+                            f"remotes/origin/{branch_name}",
+                        ],
+                        cwd=repo_dir,
+                    )
+                    if code == 0:
+                        success = True
+                        logging.debug(
+                            "Successfully created branch from remotes/origin/%s",
+                            branch_name,
+                        )
+                    else:
+                        logging.debug(
+                            "Failed to checkout from remotes/origin/%s: %s",
+                            branch_name,
+                            err.strip(),
+                        )
+
+                        # Last resort: try with just origin/branch_name
+                        code, out, err = _run_git_command(
+                            ["checkout", "-b", branch_name, f"origin/{branch_name}"],
+                            cwd=repo_dir,
+                        )
+                        if code == 0:
+                            success = True
+                            logging.debug(
+                                "Successfully created branch from origin/%s",
+                                branch_name,
+                            )
+                        else:
+                            logging.debug(
+                                "Failed to checkout from origin/%s: %s",
+                                branch_name,
+                                err.strip(),
+                            )
+
+            if not success:
+                logging.error(
+                    "All approaches failed to checkout remote branch %s", branch_name
+                )
+                return None
+
+            logging.info("✅ Checked out existing remote branch: %s", branch_name)
+            return branch_name
+
+        # Check if branch already exists locally (but not on remote)
+        elif check_branch_exists_locally(repo_dir, branch_name):
+            logging.info(
+                "🔄 Branch %s exists locally but not on remote, switching to it",
+                branch_name,
+            )
+
+            # Switch to existing local branch
+            code, out, err = _run_git_command(["checkout", branch_name], cwd=repo_dir)
+            if code != 0:
+                logging.error(
+                    "Failed to checkout existing local branch %s: %s",
+                    branch_name,
+                    err.strip(),
+                )
+                return None
+
+            logging.info("✅ Switched to existing local branch: %s", branch_name)
+            return branch_name
+
+        # Branch doesn't exist locally or remotely, create it
+        logging.info("Creating new branch: %s", branch_name)
+
+        # Checkout main/master branch first
+        code, out, err = _run_git_command(["checkout", "main"], cwd=repo_dir)
+        if code != 0:
+            # Try master if main doesn't exist
+            code, out, err = _run_git_command(["checkout", "master"], cwd=repo_dir)
+            if code != 0:
+                logging.error("Failed to checkout main/master branch: %s", err.strip())
+                return None
+
+        # Pull latest changes
+        code, out, err = _run_git_command(["pull", "origin", "main"], cwd=repo_dir)
+        if code != 0:
+            # Try master if main doesn't exist
+            code, out, err = _run_git_command(
+                ["pull", "origin", "master"], cwd=repo_dir
+            )
+            if code != 0:
+                logging.error("Failed to pull latest changes: %s", err.strip())
+                return None
+
+        # Create and checkout new branch
+        code, out, err = _run_git_command(["checkout", "-b", branch_name], cwd=repo_dir)
+        if code != 0:
+            logging.error("Failed to create branch %s: %s", branch_name, err.strip())
+            return None
+
+        logging.info("✅ Successfully created branch: %s", branch_name)
+        return branch_name
+
+    except Exception as e:
+        logging.exception("Error creating update branch")
+        return None
+
+
+def update_helm_release_manifest(
+    repo_dir: str, manifest_path: str, new_version: str, current_version: str
+) -> bool:
+    """Update the HelmRelease manifest with the new version, preserving original formatting."""
+    try:
+        full_path = Path(repo_dir) / manifest_path
+        logging.info("Updating manifest: %s", full_path)
+
+        # Read the manifest file as text to preserve formatting
+        with open(full_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # Check if the file already contains the target version
+        import re
+
+        target_version_patterns = [
+            r"(^\s*version:\s*)" + re.escape(str(new_version)) + r"(\s*$)",
+            r'(^\s*version:\s*["\'])' + re.escape(str(new_version)) + r'(["\']\s*$)',
+        ]
+
+        for pattern in target_version_patterns:
+            if re.search(pattern, content, re.MULTILINE):
+                logging.info(
+                    "✅ Manifest already contains target version %s, no update needed",
+                    new_version,
+                )
+                return True
+
+        # Use regex to find and replace the version field while preserving formatting
+        # Pattern to match version field in chart spec, accounting for various indentation
+        patterns = [
+            # Standard format: version: old_version
+            r"(^\s*version:\s*)" + re.escape(str(current_version)) + r"(\s*$)",
+            # With quotes: version: "old_version"
+            r'(^\s*version:\s*["\'])'
+            + re.escape(str(current_version))
+            + r'(["\']\s*$)',
+        ]
+
+        updated = False
+        for pattern in patterns:
+            if re.search(pattern, content, re.MULTILINE):
+                # Use a lambda function to avoid backreference issues in the replacement string
+                def replacement(match):
+                    return match.group(1) + str(new_version) + match.group(2)
+
+                content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
+                updated = True
+                logging.info(
+                    "Updated version from %s to %s in manifest",
+                    current_version,
+                    new_version,
+                )
+                break
+
+        if not updated:
+            logging.warning(
+                "No version field found to update in manifest (searched for: %s)",
+                current_version,
+            )
+            return False
+
+        # Write back the content preserving original formatting
+        with open(full_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        logging.info("✅ Successfully updated manifest with version %s", new_version)
+        return True
+
+    except Exception as e:
+        logging.exception("Error updating HelmRelease manifest")
+        return False
+
+
+def check_branch_exists_on_remote(repo_dir: str, branch_name: str) -> bool:
+    """Check if a branch exists on the remote repository."""
+    try:
+        code, out, err = _run_git_command(
+            ["ls-remote", "--heads", "origin", branch_name], cwd=repo_dir
+        )
+        if code == 0 and out.strip():
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def check_branch_exists_locally(repo_dir: str, branch_name: str) -> bool:
+    """Check if a branch exists locally."""
+    try:
+        code, out, err = _run_git_command(
+            ["show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}"],
+            cwd=repo_dir,
+        )
+        return code == 0
+    except Exception:
+        return False
+
+
+def check_if_pr_already_exists(
+    github_client: Github, namespace: str, name: str, branch_name: str
+) -> Optional[str]:
+    """Check if a PR already exists for this update."""
+    try:
+        if not GITHUB_REPOSITORY:
+            return None
+
+        owner, repo_name = GITHUB_REPOSITORY.split("/", 1)
+        repo = github_client.get_repo(f"{owner}/{repo_name}")
+
+        # Get all open PRs
+        pulls = repo.get_pulls(state="open", head=f"{owner}:{branch_name}")
+
+        # Check if any PR matches our update
+        title_pattern = f"Update {name} in namespace {namespace}"
+        for pr in pulls:
+            if title_pattern in pr.title:
+                logging.info(
+                    "✅ Found existing PR for %s/%s: %s", namespace, name, pr.html_url
+                )
+                return pr.html_url
+
+        return None
+    except Exception as e:
+        logging.debug("Error checking for existing PR: %s", str(e))
+        return None
+
+
+def commit_and_push_changes(
+    repo_dir: str,
+    branch_name: str,
+    namespace: str,
+    name: str,
+    current_version: str,
+    new_version: str,
+    github_client: Optional[Github] = None,
+) -> bool:
+    """Commit the changes and push the branch to remote."""
+    try:
+        # Configure git user identity if not already set
+        logging.debug("Configuring git user identity...")
+
+        # Set git user name and email for commits
+        git_user_name = os.getenv("GIT_USER_NAME", "fluxcd-helm-upgrader")
+        git_user_email = os.getenv(
+            "GIT_USER_EMAIL", "fluxcd-helm-upgrader@noreply.local"
+        )
+
+        # Configure git user identity
+        code, out, err = _run_git_command(
+            ["config", "user.name", git_user_name], cwd=repo_dir
+        )
+        if code != 0:
+            logging.warning("Failed to set git user name: %s", err.strip())
+
+        code, out, err = _run_git_command(
+            ["config", "user.email", git_user_email], cwd=repo_dir
+        )
+        if code != 0:
+            logging.warning("Failed to set git user email: %s", err.strip())
+
+        # First, check if the branch already exists on remote and if PR already exists
+        branch_exists_on_remote = check_branch_exists_on_remote(repo_dir, branch_name)
+
+        if branch_exists_on_remote:
+            logging.info(
+                "🔄 Branch %s already exists on remote, will force push", branch_name
+            )
+            # Note: PR existence is now checked earlier in the flow to avoid unnecessary operations
+
+        # Add the changed file
+        code, out, err = _run_git_command(["add", "."], cwd=repo_dir)
+        if code != 0:
+            logging.error("Failed to add files to git: %s", err.strip())
+            return False
+
+        # Check if there are any changes to commit
+        code, out, err = _run_git_command(["status", "--porcelain"], cwd=repo_dir)
+        if code != 0:
+            logging.error("Failed to check git status: %s", err.strip())
+            return False
+
+        if not out.strip():
+            logging.info("No changes to commit (manifest may already be up to date)")
+            return True  # Not an error, just nothing to do
+
+        # Create commit message
+        commit_message = f"Update {name} in namespace {namespace} from {current_version} to {new_version}"
+        code, out, err = _run_git_command(
+            ["commit", "-m", commit_message], cwd=repo_dir
+        )
+        if code != 0:
+            logging.error("Failed to commit changes: %s", err.strip())
+            return False
+
+        logging.info("✅ Changes committed with message: %s", commit_message)
+
+        # Push the branch to remote
+        push_args = ["push", "-u", "origin", branch_name]
+
+        # Force push if the branch already exists on remote OR if GIT_FORCE_PUSH is set
+        if branch_exists_on_remote or GIT_FORCE_PUSH:
+            push_args.insert(1, "--force")
+            if branch_exists_on_remote:
+                logging.info(
+                    "🔄 Force pushing to existing remote branch %s for latest commit reference",
+                    branch_name,
+                )
+            else:
+                logging.warning("Force pushing branch %s", branch_name)
+
+        code, out, err = _run_git_command(push_args, cwd=repo_dir)
+        if code != 0:
+            logging.error("Failed to push branch %s: %s", branch_name, err.strip())
+            if "non-fast-forward" in err or "Updates were rejected" in err:
+                logging.info(
+                    "💡 Tip: Set GIT_FORCE_PUSH=true to force push existing branches"
+                )
+            return False
+
+        logging.info("✅ Successfully pushed branch: %s", branch_name)
+        return True
+
+    except Exception as e:
+        logging.exception("Error committing and pushing changes")
+        return False
+
+
+def create_github_pull_request(
+    github_client: Github,
+    namespace: str,
+    name: str,
+    current_version: str,
+    new_version: str,
+    branch_name: str,
+    manifest_path: str,
+) -> Optional[str]:
+    """Create a GitHub Pull Request for the HelmRelease update."""
+    if not GITHUB_REPOSITORY:
+        logging.error("GITHUB_REPOSITORY not configured")
+        return None
+
+    try:
+        # Parse repository owner/repo
+        if "/" not in GITHUB_REPOSITORY:
+            logging.error("GITHUB_REPOSITORY must be in format 'owner/repo'")
+            return None
+
+        owner, repo_name = GITHUB_REPOSITORY.split("/", 1)
+
+        # Get the repository
+        try:
+            repo = github_client.get_repo(f"{owner}/{repo_name}")
+        except GithubException as e:
+            if e.status == 403:
+                logging.error(
+                    "❌ GitHub token lacks permission to access repository %s/%s",
+                    owner,
+                    repo_name,
+                )
+                logging.error(
+                    "Please ensure the token has 'repo' permissions for this repository"
+                )
+                return None
+            elif e.status == 404:
+                logging.error(
+                    "❌ Repository %s/%s not found or not accessible", owner, repo_name
+                )
+                logging.error("Please verify the GITHUB_REPOSITORY configuration")
+                return None
+            else:
+                logging.error(
+                    "❌ Failed to access repository %s/%s: %s", owner, repo_name, str(e)
+                )
+                return None
+
+        # Determine base branch (main or master)
+        # First check if user provided an override
+        if GITHUB_DEFAULT_BRANCH:
+            base_branch = GITHUB_DEFAULT_BRANCH
+            logging.debug("Using user-specified default branch: %s", base_branch)
+        else:
+            # Try to get the default branch from repository info (this doesn't require branch read permissions)
+            try:
+                base_branch = repo.default_branch
+                if base_branch:
+                    logging.debug("Repository default branch: %s", base_branch)
+                else:
+                    # If default_branch is not available, use common default
+                    base_branch = "main"
+                    logging.debug(
+                        "Repository default branch not available, using 'main'"
+                    )
+            except GithubException as e:
+                if e.status == 403:
+                    logging.debug(
+                        "Cannot read repository info due to permissions, using 'main'"
+                    )
+                    base_branch = "main"
+                else:
+                    logging.warning(
+                        "Error getting repository info: %s, using 'main'", str(e)
+                    )
+                    base_branch = "main"
+
+        # Note: We skip branch validation via GitHub API since:
+        # 1. We already know the head branch exists (we just pushed it)
+        # 2. The base branch is the repository default (main/master)
+        # 3. PR creation will fail with proper errors if branches don't exist
+        # 4. This avoids requiring additional GitHub token permissions beyond PR creation
+        logging.debug(
+            "Using head branch: %s, base branch: %s", branch_name, base_branch
+        )
+
+        # Create PR title
+        title = f"Update {name} in namespace {namespace} to version {new_version}"
+
+        # Create PR body with detailed information
+        body = f"""## Helm Chart Update
+
+**Application:** {name}
+**Namespace:** {namespace}
+**Current Version:** {current_version}
+**New Version:** {new_version}
+
+### Changes
+- Updated HelmRelease manifest: `{manifest_path}`
+- Version updated from `{current_version}` to `{new_version}`
+
+### What this PR does
+This pull request updates the HelmRelease for {name} in namespace {namespace} to the latest available version {new_version}.
+
+The update was automatically generated by the FluxCD Helm upgrader tool.
+
+### Testing
+Please review the changes and test in a development environment before merging.
+"""
+
+        # Create the pull request with retry logic for specific errors
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                pr = repo.create_pull(
+                    title=title, body=body, head=branch_name, base=base_branch
+                )
+
+                logging.info("✅ Successfully created Pull Request: %s", pr.html_url)
+                return pr.html_url
+
+            except GithubException as e:
+                error_message = str(e).lower()
+                if "not all refs are readable" in error_message:
+                    if attempt < max_retries - 1:
+                        wait_time = (attempt + 1) * 2  # 2, 4, 6 seconds
+                        logging.warning(
+                            "⚠️  'Not all refs are readable' error, retrying in %d seconds... (attempt %d/%d)",
+                            wait_time,
+                            attempt + 1,
+                            max_retries,
+                        )
+                        import time
+
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logging.error(
+                            "❌ 'Not all refs are readable' error persists after %d retries",
+                            max_retries,
+                        )
+                        logging.error(
+                            "This usually indicates a permission issue or GitHub indexing delay"
+                        )
+                        logging.error(
+                            "Please ensure the GitHub token has 'repo' permissions and try again later"
+                        )
+                        return None
+                else:
+                    # Re-raise other GitHub exceptions
+                    raise e
+
+    except GithubException as e:
+        error_message = str(e).lower()
+        if "pull request already exists" in error_message:
+            # This is actually a success case - the PR already exists
+            logging.info("✅ Pull request already exists for this update")
+            logging.debug("GitHub response: %s", str(e))
+            # Try to find the existing PR URL and return it
+            try:
+                existing_pr = check_if_pr_already_exists(
+                    github_client, namespace, name, branch_name
+                )
+                if existing_pr:
+                    logging.info("🎯 Found existing PR: %s", existing_pr)
+                    return existing_pr
+            except Exception:
+                pass
+            return "PR already exists"  # Return something to indicate success
+        elif "validation failed" in error_message and "custom" in error_message:
+            logging.error("❌ GitHub validation error: %s", str(e))
+            logging.error(
+                "This often indicates permission issues or branch accessibility problems"
+            )
+            logging.error("Please check that:")
+            logging.error("1. The GitHub token has 'repo' permissions")
+            logging.error("2. The repository URL is correct")
+            logging.error("3. The branch was pushed successfully")
+        else:
+            logging.error("❌ Failed to create GitHub Pull Request: %s", str(e))
+        return None
+    except Exception as e:
+        logging.exception("❌ Unexpected error creating GitHub Pull Request")
+        return None
 
 
 def ensure_repo_cloned_or_updated() -> Optional[str]:
@@ -462,7 +1184,8 @@ def ensure_repo_cloned_or_updated() -> Optional[str]:
 
                 # Reset hard to remote branch
                 code, out, err = _run_git_command(
-                    ["reset", "--hard", f"origin/{branch}"], cwd=str(clone_dir_path)
+                    ["reset", "--hard", f"remotes/origin/{branch}"],
+                    cwd=str(clone_dir_path),
                 )
                 if code != 0:
                     logging.error(
@@ -893,6 +1616,102 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                 current_version_text,
                 latest_text,
             )
+
+            # Check if we should create a PR for this update
+            if GITHUB_TOKEN and repo_dir and manifest_rel_path:
+                logging.info(
+                    "🔄 Processing GitHub PR creation for %s/%s", hr_ns, hr_name
+                )
+
+                # Create GitHub client
+                github_client = create_github_client()
+                if github_client:
+                    # Generate branch name to check for existing PR
+                    branch_name = f"update-{hr_ns}-{hr_name}-{latest_text}".replace(
+                        ".", "-"
+                    )
+
+                    # Check if PR already exists before doing any file operations
+                    existing_pr = check_if_pr_already_exists(
+                        github_client, hr_ns, hr_name, branch_name
+                    )
+                    if existing_pr:
+                        logging.info(
+                            "🎯 PR already exists for %s/%s: %s",
+                            hr_ns,
+                            hr_name,
+                            existing_pr,
+                        )
+                        logging.info(
+                            "✅ Skipping file operations since PR is already created"
+                        )
+                        continue  # Skip to next HelmRelease
+
+                    # Create update branch
+                    branch_name = create_update_branch(
+                        repo_dir, hr_ns, hr_name, latest_text
+                    )
+                    if branch_name:
+                        # Update manifest
+                        if update_helm_release_manifest(
+                            repo_dir,
+                            manifest_rel_path,
+                            latest_text,
+                            current_version_text,
+                        ):
+                            # Commit and push changes (this will handle the case where no changes are needed)
+                            if commit_and_push_changes(
+                                repo_dir,
+                                branch_name,
+                                hr_ns,
+                                hr_name,
+                                current_version_text,
+                                latest_text,
+                                github_client,
+                            ):
+                                # Create PR
+                                pr_url = create_github_pull_request(
+                                    github_client,
+                                    hr_ns,
+                                    hr_name,
+                                    current_version_text,
+                                    latest_text,
+                                    branch_name,
+                                    manifest_rel_path,
+                                )
+                                if pr_url:
+                                    logging.info(
+                                        "🎉 Successfully created PR for %s/%s: %s",
+                                        hr_ns,
+                                        hr_name,
+                                        pr_url,
+                                    )
+                                else:
+                                    logging.error(
+                                        "❌ Failed to create PR for %s/%s",
+                                        hr_ns,
+                                        hr_name,
+                                    )
+                            else:
+                                logging.error(
+                                    "❌ Failed to commit and push changes for %s/%s",
+                                    hr_ns,
+                                    hr_name,
+                                )
+                        else:
+                            logging.error(
+                                "❌ Failed to update manifest for %s/%s", hr_ns, hr_name
+                            )
+                    else:
+                        logging.error(
+                            "❌ Failed to create update branch for %s/%s",
+                            hr_ns,
+                            hr_name,
+                        )
+                else:
+                    logging.warning(
+                        "⚠️  GitHub client not available, skipping PR creation"
+                    )
         else:
             logging.debug(
                 "%s/%s: up-to-date (chart %s current %s, latest %s)",
@@ -914,6 +1733,12 @@ def main() -> None:
     if REPO_URL:
         logging.info("📂 Repository: %s", REPO_URL)
         logging.info("🔑 SSH Keys: %s, %s", SSH_PRIVATE_KEY_PATH, SSH_PUBLIC_KEY_PATH)
+        if GITHUB_TOKEN and GITHUB_REPOSITORY:
+            logging.info("🐙 GitHub PRs enabled for: %s", GITHUB_REPOSITORY)
+        elif GITHUB_TOKEN:
+            logging.info("🐙 GitHub token configured but no repository specified")
+        else:
+            logging.info("🐙 GitHub integration disabled - no token provided")
     else:
         logging.info("📂 No repository URL configured - only cluster scanning enabled")
     while True:

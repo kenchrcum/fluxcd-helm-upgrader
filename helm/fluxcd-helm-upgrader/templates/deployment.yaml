@@ -52,6 +52,30 @@ spec:
             - name: SSH_KNOWN_HOSTS_PATH
               value: "/home/app/.ssh/known_hosts"
             {{- end }}
+            {{- if .Values.github.token }}
+            - name: GITHUB_TOKEN
+              value: {{ .Values.github.token | quote }}
+            {{- end }}
+            {{- if .Values.github.repository }}
+            - name: GITHUB_REPOSITORY
+              value: {{ .Values.github.repository | quote }}
+            {{- end }}
+            {{- if .Values.github.defaultBranch }}
+            - name: GITHUB_DEFAULT_BRANCH
+              value: {{ .Values.github.defaultBranch | quote }}
+            {{- end }}
+            {{- if .Values.git.userName }}
+            - name: GIT_USER_NAME
+              value: {{ .Values.git.userName | quote }}
+            {{- end }}
+            {{- if .Values.git.userEmail }}
+            - name: GIT_USER_EMAIL
+              value: {{ .Values.git.userEmail | quote }}
+            {{- end }}
+            {{- if .Values.git.forcePush }}
+            - name: GIT_FORCE_PUSH
+              value: {{ .Values.git.forcePush | quote }}
+            {{- end }}
           volumeMounts:
             {{- if and .Values.repo.sshKeySecret.enabled .Values.repo.sshKeySecret.name }}
             - name: ssh-keys

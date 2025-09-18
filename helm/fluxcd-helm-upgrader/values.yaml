@@ -50,3 +50,14 @@ repo:
     publicKey: "id_rsa.pub"     # Key name for public key in secret
     knownHosts: "known_hosts"   # Key name for known_hosts in secret
 
+# GitHub integration for automatic Pull Request creation
+github:
+  token: ""                    # GitHub personal access token with repo permissions
+  repository: ""               # GitHub repository in format 'owner/repo'
+  defaultBranch: ""            # Override default branch detection (optional)
+
+# Git configuration for commits
+git:
+  userName: "fluxcd-helm-upgrader"           # Git user name for commits
+  userEmail: "fluxcd-helm-upgrader@noreply.local"  # Git user email for commits
+  forcePush: false                          # Force push branches when they exist
