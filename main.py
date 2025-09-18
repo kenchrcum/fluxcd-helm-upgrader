@@ -17,69 +17,142 @@ from kubernetes.client import ApiException
 from github import Github, GithubException
 
 
-HELM_RELEASE_GROUP = "helm.toolkit.fluxcd.io"
-SOURCE_GROUP = "source.toolkit.fluxcd.io"
-# Try newer versions first; gracefully fall back
-HELM_RELEASE_VERSIONS = ["v2", "v2beta2", "v2beta1"]
-SOURCE_VERSIONS = ["v1", "v1beta2", "v1beta1"]
+class Config:
+    """Centralized configuration management."""
+    
+    # FluxCD API configuration
+    HELM_RELEASE_GROUP = "helm.toolkit.fluxcd.io"
+    SOURCE_GROUP = "source.toolkit.fluxcd.io"
+    # Try newer versions first; gracefully fall back
+    HELM_RELEASE_VERSIONS = ["v2", "v2beta2", "v2beta1"]
+    SOURCE_VERSIONS = ["v1", "v1beta2", "v1beta1"]
+    
+    # Application configuration
+    DEFAULT_INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", "300"))
+    INCLUDE_PRERELEASE = os.getenv("INCLUDE_PRERELEASE", "false").lower() in (
+        "1", "true", "yes", "on"
+    )
+    REQUEST_TIMEOUT = (5, 20)  # connect, read
+    DEFAULT_HEADERS = {
+        "User-Agent": "fluxcd-helm-upgrader/0.2.0 (+https://github.com/kenchrcum/fluxcd-helm-upgrader)",
+        "Accept": "application/x-yaml, text/yaml, text/plain;q=0.9, */*;q=0.8",
+    }
+    
+    # Git repository configuration
+    REPO_URL = os.getenv("REPO_URL", "").strip()
+    REPO_BRANCH = os.getenv("REPO_BRANCH", "").strip()
+    REPO_SEARCH_PATTERN = os.getenv(
+        "REPO_SEARCH_PATTERN",
+        "/components/{namespace}/*/helmrelease*.y*ml",
+    ).strip()
+    REPO_CLONE_DIR = os.getenv("REPO_CLONE_DIR", "/tmp/fluxcd-repo").strip()
+    
+    # SSH configuration
+    SSH_PRIVATE_KEY_PATH = os.getenv(
+        "SSH_PRIVATE_KEY_PATH", "/home/app/.ssh/private_key"
+    ).strip()
+    SSH_PUBLIC_KEY_PATH = os.getenv(
+        "SSH_PUBLIC_KEY_PATH", "/home/app/.ssh/public_key"
+    ).strip()
+    SSH_KNOWN_HOSTS_PATH = os.getenv(
+        "SSH_KNOWN_HOSTS_PATH", "/home/app/.ssh/known_hosts"
+    ).strip()
+    
+    # GitHub configuration
+    GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
+    GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "").strip()
+    GITHUB_DEFAULT_BRANCH = os.getenv("GITHUB_DEFAULT_BRANCH", "").strip()
+    GIT_FORCE_PUSH = os.getenv("GIT_FORCE_PUSH", "false").lower() in (
+        "1", "true", "yes", "on"
+    )
+    
+    @classmethod
+    def get_boolean_env(cls, key: str, default: bool = False) -> bool:
+        """Helper to parse boolean environment variables."""
+        return os.getenv(key, str(default)).lower() in ("1", "true", "yes", "on")
 
-DEFAULT_INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", "300"))
-INCLUDE_PRERELEASE = os.getenv("INCLUDE_PRERELEASE", "false").lower() in (
-    "1",
-    "true",
-    "yes",
-    "on",
-)
-REQUEST_TIMEOUT = (5, 20)  # connect, read
-DEFAULT_HEADERS = {
-    "User-Agent": "fluxcd-helm-upgrader/0.1 (+https://github.com/kenchrcum/fluxcd-helm-upgrader)",
-    "Accept": "application/x-yaml, text/yaml, text/plain;q=0.9, */*;q=0.8",
-}
 
-# Git repository configuration for locating HelmRelease manifests
-REPO_URL = os.getenv("REPO_URL", "").strip()
-REPO_BRANCH = os.getenv("REPO_BRANCH", "").strip()
-REPO_SEARCH_PATTERN = os.getenv(
-    "REPO_SEARCH_PATTERN",
-    "/components/{namespace}/*/helmrelease*.y*ml",
-).strip()
-REPO_CLONE_DIR = os.getenv("REPO_CLONE_DIR", "/tmp/fluxcd-repo").strip()
+# Legacy global constants for backward compatibility
+HELM_RELEASE_GROUP = Config.HELM_RELEASE_GROUP
+SOURCE_GROUP = Config.SOURCE_GROUP
+HELM_RELEASE_VERSIONS = Config.HELM_RELEASE_VERSIONS
+SOURCE_VERSIONS = Config.SOURCE_VERSIONS
+DEFAULT_INTERVAL_SECONDS = Config.DEFAULT_INTERVAL_SECONDS
+INCLUDE_PRERELEASE = Config.INCLUDE_PRERELEASE
+REQUEST_TIMEOUT = Config.REQUEST_TIMEOUT
+DEFAULT_HEADERS = Config.DEFAULT_HEADERS
+REPO_URL = Config.REPO_URL
+REPO_BRANCH = Config.REPO_BRANCH
+REPO_SEARCH_PATTERN = Config.REPO_SEARCH_PATTERN
+REPO_CLONE_DIR = Config.REPO_CLONE_DIR
+SSH_PRIVATE_KEY_PATH = Config.SSH_PRIVATE_KEY_PATH
+SSH_PUBLIC_KEY_PATH = Config.SSH_PUBLIC_KEY_PATH
+SSH_KNOWN_HOSTS_PATH = Config.SSH_KNOWN_HOSTS_PATH
+GITHUB_TOKEN = Config.GITHUB_TOKEN
+GITHUB_REPOSITORY = Config.GITHUB_REPOSITORY
+GITHUB_DEFAULT_BRANCH = Config.GITHUB_DEFAULT_BRANCH
+GIT_FORCE_PUSH = Config.GIT_FORCE_PUSH
 
-# SSH key configuration for private repository access
-SSH_PRIVATE_KEY_PATH = os.getenv(
-    "SSH_PRIVATE_KEY_PATH", "/home/app/.ssh/private_key"
-).strip()
-SSH_PUBLIC_KEY_PATH = os.getenv(
-    "SSH_PUBLIC_KEY_PATH", "/home/app/.ssh/public_key"
-).strip()
-SSH_KNOWN_HOSTS_PATH = os.getenv(
-    "SSH_KNOWN_HOSTS_PATH", "/home/app/.ssh/known_hosts"
-).strip()
 
-# GitHub configuration for Pull Request creation
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
-GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "").strip()  # Format: owner/repo
-GITHUB_DEFAULT_BRANCH = os.getenv(
-    "GITHUB_DEFAULT_BRANCH", ""
-).strip()  # Override default branch detection
-GIT_FORCE_PUSH = os.getenv("GIT_FORCE_PUSH", "false").lower() in (
-    "1",
-    "true",
-    "yes",
-    "on",
-)  # Force push when branch exists
+# Helper functions for common patterns
+def get_home_directory() -> Path:
+    """Get the appropriate home directory based on environment."""
+    return Path("/home/app") if os.path.exists("/home/app") else Path.home()
+
+
+def get_git_ssh_command() -> str:
+    """Get the standardized Git SSH command."""
+    return (
+        f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={SSH_KNOWN_HOSTS_PATH} "
+        f"-i {SSH_PRIVATE_KEY_PATH} -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=30"
+    )
+
+
+def parse_github_repository(repo_str: str) -> Tuple[str, str]:
+    """Parse GitHub repository string into owner and repo name."""
+    if "/" not in repo_str:
+        raise ValueError("GITHUB_REPOSITORY must be in format 'owner/repo'")
+    return repo_str.split("/", 1)
+
+
+def safe_run_command(cmd: List[str], **kwargs) -> Tuple[int, str, str]:
+    """Safely run a subprocess command with error handling."""
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            **kwargs
+        )
+        return proc.returncode, proc.stdout, proc.stderr
+    except Exception as e:
+        logging.error("Failed to run command %s: %s", " ".join(cmd), str(e))
+        return 1, "", str(e)
+
+
+def handle_github_exception(e: GithubException, context: str) -> None:
+    """Standardized GitHub exception handling."""
+    error_message = str(e).lower()
+    if e.status == 403:
+        logging.error("❌ GitHub permission denied in %s: %s", context, str(e))
+        logging.error("   Please ensure the token has 'repo' permissions")
+    elif e.status == 404:
+        logging.error("❌ GitHub resource not found in %s: %s", context, str(e))
+    elif "pull request already exists" in error_message:
+        logging.info("✅ Pull request already exists for %s", context)
+    elif "validation failed" in error_message:
+        logging.error("❌ GitHub validation error in %s: %s", context, str(e))
+        logging.error("   This often indicates permission or branch accessibility issues")
+    else:
+        logging.error("❌ GitHub error in %s: %s", context, str(e))
 
 
 def validate_ssh_key_loading(private_key_path: str) -> bool:
     """Test if SSH private key can be loaded by ssh-keygen."""
     try:
         # First check if ssh-keygen is available
-        check_ssh_keygen = subprocess.run(
-            ["which", "ssh-keygen"],
-            capture_output=True,
-            text=True,
-        )
-        if check_ssh_keygen.returncode != 0:
+        returncode, _, _ = safe_run_command(["which", "ssh-keygen"])
+        if returncode != 0:
             logging.warning("ssh-keygen not found, skipping key validation")
             return True
 
@@ -106,18 +179,16 @@ def validate_ssh_key_loading(private_key_path: str) -> bool:
             return False
 
         # Try to validate with ssh-keygen
-        result = subprocess.run(
+        returncode, _, stderr = safe_run_command(
             ["ssh-keygen", "-l", "-f", private_key_path],
-            capture_output=True,
-            text=True,
-            timeout=10,
+            timeout=10
         )
 
-        if result.returncode == 0:
+        if returncode == 0:
             logging.debug("SSH key loading validation passed")
             return True
         else:
-            stderr_msg = result.stderr.strip()
+            stderr_msg = stderr.strip()
             logging.warning("SSH key validation warning: %s", stderr_msg)
 
             # If it's just a warning about not being able to print key, but the command succeeded partially, continue
@@ -139,12 +210,7 @@ def validate_ssh_key_loading(private_key_path: str) -> bool:
 def setup_ssh_config() -> bool:
     """Setup SSH configuration for git operations."""
     try:
-        # Determine SSH directory based on environment
-        if os.path.exists("/home/app"):  # Container environment
-            home_dir = Path("/home/app")
-        else:  # Local development environment
-            home_dir = Path.home()
-
+        home_dir = get_home_directory()
         ssh_dir = home_dir / ".ssh"
         ssh_dir.mkdir(mode=0o700, exist_ok=True)
         logging.debug("SSH directory ready: %s", ssh_dir)
@@ -251,10 +317,7 @@ def setup_ssh_config() -> bool:
 
         # Configure git to use SSH with the correct key paths
         env = os.environ.copy()
-        env.setdefault(
-            "GIT_SSH_COMMAND",
-            f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={SSH_KNOWN_HOSTS_PATH} -i {SSH_PRIVATE_KEY_PATH} -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=30",
-        )
+        env.setdefault("GIT_SSH_COMMAND", get_git_ssh_command())
 
         return True
 
@@ -272,35 +335,21 @@ def validate_ssh_access(repo_url: str) -> bool:
         # Convert HTTPS URL to SSH URL if needed
         ssh_url = convert_to_ssh_url(repo_url)
 
-        # Determine SSH directory based on environment
-        if os.path.exists("/home/app"):  # Container environment
-            home_dir = Path("/home/app")
-        else:  # Local development environment
-            home_dir = Path.home()
-
-        ssh_dir = home_dir / ".ssh"
-        ssh_dir_str = str(ssh_dir)
-
         # Test SSH access with git ls-remote using the correct key paths
         env = os.environ.copy()
-        env.setdefault(
-            "GIT_SSH_COMMAND",
-            f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={SSH_KNOWN_HOSTS_PATH} -i {SSH_PRIVATE_KEY_PATH} -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=30",
-        )
+        env.setdefault("GIT_SSH_COMMAND", get_git_ssh_command())
 
-        result = subprocess.run(
+        returncode, _, stderr = safe_run_command(
             ["git", "ls-remote", ssh_url, "HEAD"],
             env=env,
-            capture_output=True,
-            text=True,
             timeout=30,
         )
 
-        if result.returncode == 0:
+        if returncode == 0:
             logging.debug("SSH access validated")
             return True
         else:
-            stderr_output = result.stderr.strip()
+            stderr_output = stderr.strip()
             logging.error("SSH access validation failed: %s", stderr_output)
 
             # Provide specific guidance based on error type
@@ -362,89 +411,124 @@ def configure_logging() -> None:
     )
 
 
-def validate_github_setup(github_client: Github) -> bool:
-    """Validate GitHub token permissions and repository access."""
-    if not GITHUB_REPOSITORY:
-        logging.warning("GITHUB_REPOSITORY not configured")
-        return False
+# Function removed - now part of GitHubManager class
 
-    try:
-        owner, repo_name = GITHUB_REPOSITORY.split("/", 1)
-        repo = github_client.get_repo(f"{owner}/{repo_name}")
-        logging.debug("✅ Repository access validated: %s/%s", owner, repo_name)
 
-        # Check if we can read repository info
-        default_branch = repo.default_branch
-        if default_branch:
-            logging.debug("✅ Can read repository default branch: %s", default_branch)
-        else:
-            logging.warning("⚠️  Cannot read repository default branch")
+class GitHubManager:
+    """Manages GitHub operations and client creation."""
+    
+    def __init__(self):
+        self.client: Optional[Github] = None
+        self.owner: Optional[str] = None
+        self.repo_name: Optional[str] = None
+        
+        if GITHUB_TOKEN and GITHUB_REPOSITORY:
+            self.client = self._create_client()
+            if self.client:
+                try:
+                    self.owner, self.repo_name = parse_github_repository(GITHUB_REPOSITORY)
+                except ValueError as e:
+                    logging.error("Invalid GitHub repository format: %s", str(e))
+                    self.client = None
+    
+    def _create_client(self) -> Optional[Github]:
+        """Create and return a GitHub client if token is available."""
+        if not GITHUB_TOKEN:
+            logging.debug("No GitHub token provided, GitHub integration disabled")
+            return None
 
-        # Check if we can read branches (this tests more permissions)
         try:
-            branches = repo.get_branches()
-            logging.debug("✅ Can read repository branches")
+            from github import Auth
+
+            # Use the new authentication method to avoid deprecation warning
+            auth = Auth.Token(GITHUB_TOKEN)
+            g = Github(auth=auth)
+            # Test the connection by getting user info
+            user = g.get_user()
+            logging.info("✅ Connected to GitHub as: %s", user.login)
+
+            # Validate GitHub setup
+            if not self._validate_setup(g):
+                logging.warning(
+                    "⚠️  GitHub setup validation failed, PR creation may not work properly"
+                )
+
+            return g
+        except GithubException as e:
+            logging.error("❌ Failed to authenticate with GitHub: %s", str(e))
+            return None
+        except Exception as e:
+            logging.error("❌ Unexpected error connecting to GitHub: %s", str(e))
+            return None
+    
+    def _validate_setup(self, github_client: Github) -> bool:
+        """Validate GitHub token permissions and repository access."""
+        if not GITHUB_REPOSITORY:
+            logging.warning("GITHUB_REPOSITORY not configured")
+            return False
+
+        try:
+            owner, repo_name = parse_github_repository(GITHUB_REPOSITORY)
+            repo = github_client.get_repo(f"{owner}/{repo_name}")
+            logging.debug("✅ Repository access validated: %s/%s", owner, repo_name)
+
+            # Check if we can read repository info
+            default_branch = repo.default_branch
+            if default_branch:
+                logging.debug("✅ Can read repository default branch: %s", default_branch)
+            else:
+                logging.warning("⚠️  Cannot read repository default branch")
+
+            # Check if we can read branches (this tests more permissions)
+            try:
+                branches = repo.get_branches()
+                logging.debug("✅ Can read repository branches")
+            except GithubException as e:
+                if e.status == 403:
+                    logging.warning(
+                        "⚠️  GitHub token lacks permission to read repository branches"
+                    )
+                    logging.warning(
+                        "   This may cause issues with PR creation, but will fallback to defaults"
+                    )
+                else:
+                    logging.warning("⚠️  Cannot read repository branches: %s", str(e))
+
+            return True
         except GithubException as e:
             if e.status == 403:
-                logging.warning(
-                    "⚠️  GitHub token lacks permission to read repository branches"
+                logging.error(
+                    "❌ GitHub token lacks permission to access repository %s",
+                    GITHUB_REPOSITORY,
                 )
-                logging.warning(
-                    "   This may cause issues with PR creation, but will fallback to defaults"
+                logging.error("   Please ensure the token has 'repo' permissions")
+            elif e.status == 404:
+                logging.error(
+                    "❌ Repository %s not found or not accessible", GITHUB_REPOSITORY
                 )
+                logging.error("   Please verify the repository exists and is accessible")
             else:
-                logging.warning("⚠️  Cannot read repository branches: %s", str(e))
-
-        return True
-    except GithubException as e:
-        if e.status == 403:
-            logging.error(
-                "❌ GitHub token lacks permission to access repository %s",
-                GITHUB_REPOSITORY,
-            )
-            logging.error("   Please ensure the token has 'repo' permissions")
-        elif e.status == 404:
-            logging.error(
-                "❌ Repository %s not found or not accessible", GITHUB_REPOSITORY
-            )
-            logging.error("   Please verify the repository exists and is accessible")
-        else:
-            logging.error("❌ Failed to validate repository access: %s", str(e))
-        return False
-    except Exception as e:
-        logging.error("❌ Unexpected error validating GitHub setup: %s", str(e))
-        return False
+                logging.error("❌ Failed to validate repository access: %s", str(e))
+            return False
+        except Exception as e:
+            logging.error("❌ Unexpected error validating GitHub setup: %s", str(e))
+            return False
+    
+    def is_available(self) -> bool:
+        """Check if GitHub client is available."""
+        return self.client is not None and self.owner is not None and self.repo_name is not None
+    
+    def get_repo(self):
+        """Get the repository object."""
+        if not self.is_available():
+            return None
+        return self.client.get_repo(f"{self.owner}/{self.repo_name}")
 
 
 def create_github_client() -> Optional[Github]:
-    """Create and return a GitHub client if token is available."""
-    if not GITHUB_TOKEN:
-        logging.debug("No GitHub token provided, GitHub integration disabled")
-        return None
-
-    try:
-        from github import Auth
-
-        # Use the new authentication method to avoid deprecation warning
-        auth = Auth.Token(GITHUB_TOKEN)
-        g = Github(auth=auth)
-        # Test the connection by getting user info
-        user = g.get_user()
-        logging.info("✅ Connected to GitHub as: %s", user.login)
-
-        # Validate GitHub setup
-        if not validate_github_setup(g):
-            logging.warning(
-                "⚠️  GitHub setup validation failed, PR creation may not work properly"
-            )
-
-        return g
-    except GithubException as e:
-        logging.error("❌ Failed to authenticate with GitHub: %s", str(e))
-        return None
-    except Exception as e:
-        logging.error("❌ Unexpected error connecting to GitHub: %s", str(e))
-        return None
+    """Legacy function for backward compatibility."""
+    github_manager = GitHubManager()
+    return github_manager.client
 
 
 def load_kube_config() -> client.CustomObjectsApi:
@@ -460,46 +544,23 @@ def load_kube_config() -> client.CustomObjectsApi:
 def _run_git_command(
     args: List[str], cwd: Optional[str] = None
 ) -> Tuple[int, str, str]:
+    """Run a git command with standardized environment setup."""
     env = os.environ.copy()
     # Disable terminal prompts entirely so we fail fast instead of hanging
-    env.setdefault("GIT_TERMINAL_PROMPT", "0")
-    env.setdefault("GIT_ASKPASS", "true")
-
-    # Clear any existing credential helpers that might interfere
-    env.setdefault("GIT_CONFIG_GLOBAL", "")
-    env.setdefault("GIT_CONFIG_SYSTEM", "")
-
-    # Use SSH authentication with appropriate SSH directory
-    if os.path.exists("/home/app"):  # Container environment
-        home_dir = Path("/home/app")
-    else:  # Local development environment
-        home_dir = Path.home()
-
-    ssh_dir = home_dir / ".ssh"
-    ssh_dir_str = str(ssh_dir)
-    env.setdefault(
-        "GIT_SSH_COMMAND",
-        f"ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile={SSH_KNOWN_HOSTS_PATH} -i {SSH_PRIVATE_KEY_PATH} -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=30",
-    )
-    base_cmd = ["git"]
-    base_cmd += ["-c", "credential.helper="]  # Disable credential helpers
-
+    env.update({
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_ASKPASS": "true",
+        "GIT_CONFIG_GLOBAL": "",
+        "GIT_CONFIG_SYSTEM": "",
+        "GIT_SSH_COMMAND": get_git_ssh_command(),
+    })
+    
+    base_cmd = ["git", "-c", "credential.helper="]  # Disable credential helpers
     full_cmd = base_cmd + args
 
-    # Log the command for debugging
-    safe_cmd = full_cmd
+    logging.debug("Running git command: %s", " ".join(full_cmd))
 
-    logging.debug("Running git command: %s", " ".join(safe_cmd))
-
-    proc = subprocess.run(
-        full_cmd,
-        cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=env,
-    )
-    return proc.returncode, proc.stdout, proc.stderr
+    return safe_run_command(full_cmd, cwd=cwd, env=env)
 
 
 def create_update_branch(
@@ -761,12 +822,10 @@ def update_helm_release_manifest(
 def check_branch_exists_on_remote(repo_dir: str, branch_name: str) -> bool:
     """Check if a branch exists on the remote repository."""
     try:
-        code, out, err = _run_git_command(
+        code, out, _ = _run_git_command(
             ["ls-remote", "--heads", "origin", branch_name], cwd=repo_dir
         )
-        if code == 0 and out.strip():
-            return True
-        return False
+        return code == 0 and bool(out.strip())
     except Exception:
         return False
 
@@ -774,7 +833,7 @@ def check_branch_exists_on_remote(repo_dir: str, branch_name: str) -> bool:
 def check_branch_exists_locally(repo_dir: str, branch_name: str) -> bool:
     """Check if a branch exists locally."""
     try:
-        code, out, err = _run_git_command(
+        code, _, _ = _run_git_command(
             ["show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}"],
             cwd=repo_dir,
         )
@@ -791,7 +850,7 @@ def check_if_pr_already_exists(
         if not GITHUB_REPOSITORY:
             return None
 
-        owner, repo_name = GITHUB_REPOSITORY.split("/", 1)
+        owner, repo_name = parse_github_repository(GITHUB_REPOSITORY)
         repo = github_client.get_repo(f"{owner}/{repo_name}")
 
         # Get all open PRs
@@ -928,11 +987,11 @@ def create_github_pull_request(
 
     try:
         # Parse repository owner/repo
-        if "/" not in GITHUB_REPOSITORY:
-            logging.error("GITHUB_REPOSITORY must be in format 'owner/repo'")
+        try:
+            owner, repo_name = parse_github_repository(GITHUB_REPOSITORY)
+        except ValueError as e:
+            logging.error(str(e))
             return None
-
-        owner, repo_name = GITHUB_REPOSITORY.split("/", 1)
 
         # Get the repository
         try:
@@ -1205,51 +1264,74 @@ def ensure_repo_cloned_or_updated() -> Optional[str]:
     return str(clone_dir_path)
 
 
+# Cache for manifest paths to avoid repeated file system searches
+_manifest_cache: Dict[str, Optional[str]] = {}
+
 def resolve_manifest_path_for_release(
     repo_dir: str, namespace: str, name: str
 ) -> Optional[str]:
+    """Resolve manifest path with caching for performance."""
+    cache_key = f"{repo_dir}:{namespace}:{name}"
+    
+    # Check cache first
+    if cache_key in _manifest_cache:
+        return _manifest_cache[cache_key]
+    
     try:
         # Allow multiple patterns separated by ';'
-        patterns = [p for p in REPO_SEARCH_PATTERN.split(";") if p.strip()]
+        patterns = [p.strip() for p in REPO_SEARCH_PATTERN.split(";") if p.strip()]
         if not patterns:
             patterns = ["**/helmrelease*.y*ml"]
+        
         repo_root = Path(repo_dir)
+        
         for pattern in patterns:
             try:
                 substituted = pattern.format(namespace=namespace, name=name)
             except Exception:
                 substituted = pattern
+            
             substituted = substituted.lstrip("/")
+            
             for path in glob.glob(str(repo_root / substituted), recursive=True):
                 p = Path(path)
                 if not p.is_file():
                     continue
+                
                 try:
                     content = p.read_text(encoding="utf-8")
-                except Exception:
-                    continue
-                try:
                     for doc in yaml.safe_load_all(content):
                         if not isinstance(doc, dict):
                             continue
                         if str(doc.get("kind")) != "HelmRelease":
                             continue
+                        
                         metadata = doc.get("metadata") or {}
                         if metadata.get("name") != name:
                             continue
+                        
                         # If namespace is present in file, ensure it matches; otherwise accept
                         file_ns = metadata.get("namespace")
                         if file_ns and file_ns != namespace:
                             continue
-                        return str(p.relative_to(repo_root))
+                        
+                        result = str(p.relative_to(repo_root))
+                        _manifest_cache[cache_key] = result
+                        return result
+                        
                 except Exception:
                     # Ignore YAML parse errors for non-HelmRelease files
                     continue
+        
+        # Cache negative result
+        _manifest_cache[cache_key] = None
         return None
+        
     except Exception:
         logging.exception(
             "Error searching for HelmRelease manifest for %s/%s", namespace, name
         )
+        _manifest_cache[cache_key] = None
         return None
 
 
@@ -1413,15 +1495,28 @@ def get_current_chart_name_and_version(
     return chart_name, current_version
 
 
+# Cache for parsed versions to avoid repeated parsing
+_version_cache: Dict[str, Optional[semver.VersionInfo]] = {}
+
 def parse_version(text: Optional[str]) -> Optional[semver.VersionInfo]:
+    """Parse version string with caching for performance."""
     if not text:
         return None
+    
+    # Check cache first
+    if text in _version_cache:
+        return _version_cache[text]
+    
     raw = text.strip()
     if raw.startswith("v"):
         raw = raw[1:]
+    
     try:
-        return semver.VersionInfo.parse(raw)
+        version = semver.VersionInfo.parse(raw)
+        _version_cache[text] = version
+        return version
     except ValueError:
+        _version_cache[text] = None
         return None
 
 
@@ -1488,23 +1583,41 @@ def fetch_repo_index(repo: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 def latest_available_version(
     index: Dict[str, Any], chart_name: str, include_prerelease: bool
 ) -> Optional[str]:
+    """Find the latest available version from chart index with optimization."""
     entries = (index or {}).get("entries") or {}
     chart_entries = entries.get(chart_name) or []
-    best: Optional[Tuple[semver.VersionInfo, str]] = None
+    
+    if not chart_entries:
+        return None
+    
+    best_version: Optional[semver.VersionInfo] = None
+    best_version_text: Optional[str] = None
+    
     for entry in chart_entries:
         ver_text = entry.get("version")
-        if not ver_text:
+        if not ver_text or entry.get("deprecated") is True:
             continue
-        if entry.get("deprecated") is True:
-            continue
+            
         ver = parse_version(ver_text)
         if not ver:
             continue
-        if (not include_prerelease) and (ver.prerelease is not None):
+            
+        if not include_prerelease and ver.prerelease is not None:
             continue
-        if (best is None) or (ver > best[0]):
-            best = (ver, ver_text)
-    return best[1] if best else None
+            
+        if best_version is None or ver > best_version:
+            best_version = ver
+            best_version_text = ver_text
+    
+    return best_version_text
+
+
+def clear_caches() -> None:
+    """Clear all caches to prevent memory buildup."""
+    global _version_cache, _manifest_cache
+    _version_cache.clear()
+    _manifest_cache.clear()
+    logging.debug("Cleared performance caches")
 
 
 def check_once(coapi: client.CustomObjectsApi) -> None:
@@ -1724,30 +1837,44 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
 
 
 def main() -> None:
+    """Main application entry point with optimized configuration."""
     configure_logging()
     coapi = load_kube_config()
-    interval = DEFAULT_INTERVAL_SECONDS
+    interval = Config.DEFAULT_INTERVAL_SECONDS
+    
+    # Initialize GitHub manager once
+    github_manager = GitHubManager()
 
     # Log configuration once at startup
-    logging.info("🚀 Starting FluxCD Helm upgrader (interval: %ss)", interval)
-    if REPO_URL:
-        logging.info("📂 Repository: %s", REPO_URL)
-        logging.info("🔑 SSH Keys: %s, %s", SSH_PRIVATE_KEY_PATH, SSH_PUBLIC_KEY_PATH)
-        if GITHUB_TOKEN and GITHUB_REPOSITORY:
-            logging.info("🐙 GitHub PRs enabled for: %s", GITHUB_REPOSITORY)
-        elif GITHUB_TOKEN:
-            logging.info("🐙 GitHub token configured but no repository specified")
+    logging.info("🚀 Starting FluxCD Helm upgrader v0.2.0 (interval: %ss)", interval)
+    if Config.REPO_URL:
+        logging.info("📂 Repository: %s", Config.REPO_URL)
+        logging.info("🔑 SSH Keys: %s, %s", Config.SSH_PRIVATE_KEY_PATH, Config.SSH_PUBLIC_KEY_PATH)
+        if github_manager.is_available():
+            logging.info("🐙 GitHub PRs enabled for: %s", Config.GITHUB_REPOSITORY)
+        elif Config.GITHUB_TOKEN:
+            logging.info("🐙 GitHub token configured but repository setup failed")
         else:
             logging.info("🐙 GitHub integration disabled - no token provided")
     else:
         logging.info("📂 No repository URL configured - only cluster scanning enabled")
+    
+    cycle_count = 0
     while True:
-        logging.info("🔄 Starting new check cycle...")
+        cycle_count += 1
+        logging.info("🔄 Starting check cycle #%d...", cycle_count)
+        
         try:
             check_once(coapi)
-            logging.info("✅ Check cycle completed")
+            logging.info("✅ Check cycle #%d completed", cycle_count)
+            
+            # Clear caches periodically to prevent memory buildup
+            if cycle_count % 10 == 0:
+                clear_caches()
+                
         except Exception:
-            logging.exception("❌ Unexpected failure during check loop")
+            logging.exception("❌ Unexpected failure during check loop #%d", cycle_count)
+            
         logging.info("⏰ Sleeping for %s seconds...", interval)
         time.sleep(interval)
 
