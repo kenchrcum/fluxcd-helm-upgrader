@@ -75,7 +75,11 @@ repo:
 
 # GitHub integration for automatic Pull Request creation
 github:
-  token: ""                    # GitHub personal access token with repo permissions
+  # Secret containing GitHub token
+  tokenSecret:
+    enabled: false
+    name: ""                   # Name of the secret containing the GitHub token
+    key: "token"               # Key name in the secret containing the token
   repository: ""               # GitHub repository in format 'owner/repo'
   defaultBranch: ""            # Override default branch detection (optional)
 

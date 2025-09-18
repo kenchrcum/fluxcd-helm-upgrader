@@ -69,9 +69,12 @@ spec:
                 - name: SSH_KNOWN_HOSTS_PATH
                   value: "/home/app/.ssh/known_hosts"
                 {{- end }}
-                {{- if .Values.github.token }}
+                {{- if and .Values.github.tokenSecret.enabled .Values.github.tokenSecret.name }}
                 - name: GITHUB_TOKEN
-                  value: {{ .Values.github.token | quote }}
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.github.tokenSecret.name }}
+                      key: {{ .Values.github.tokenSecret.key }}
                 {{- end }}
                 {{- if .Values.github.repository }}
                 - name: GITHUB_REPOSITORY

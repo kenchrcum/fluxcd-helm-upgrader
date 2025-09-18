@@ -159,10 +159,21 @@ To enable automatic GitHub Pull Request creation when updates are detected:
 
 #### Configure GitHub Integration
 
+First, create a secret containing your GitHub token:
+
+```bash
+kubectl create secret generic github-token \
+  --from-literal=token="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
+  -n flux-system
+```
+
 ```yaml
 # Add to your Helm values
 github:
-  token: "your-github-token-here"
+  tokenSecret:
+    enabled: true
+    name: "github-token"
+    key: "token"
   repository: "your-org/your-repo"  # Format: owner/repo
   defaultBranch: "main"             # Override if your repo uses a different default branch
 
@@ -174,7 +185,10 @@ git:
 # Or set environment variables
 env:
   - name: GITHUB_TOKEN
-    value: "your-github-token-here"
+    valueFrom:
+      secretKeyRef:
+        name: github-token
+        key: token
   - name: GITHUB_REPOSITORY
     value: "your-org/your-repo"
   - name: GITHUB_DEFAULT_BRANCH
@@ -193,7 +207,8 @@ helm install fluxcd-helm-upgrader ./helm/fluxcd-helm-upgrader \
   --set repo.url=https://github.com/your-org/flux-infra.git \
   --set repo.sshKeySecret.enabled=true \
   --set repo.sshKeySecret.name=fluxcd-helm-upgrader-ssh \
-  --set github.token=your-github-token \
+  --set github.tokenSecret.enabled=true \
+  --set github.tokenSecret.name=github-token \
   --set github.repository=your-org/flux-infra \
   --set git.userName="FluxCD Helm Upgrader" \
   --set git.userEmail="fluxcd-helm-upgrader@your-org.com"
@@ -314,7 +329,8 @@ helm install fluxcd-helm-upgrader ./helm/fluxcd-helm-upgrader \
   --set mode=cronjob \
   --set cronjob.schedule="0 */6 * * *" \
   --set repo.url="git@github.com:your-org/flux-config.git" \
-  --set github.token="your-github-token" \
+  --set github.tokenSecret.enabled=true \
+  --set github.tokenSecret.name="github-token" \
   --set github.repository="your-org/flux-config"
 ```
 
@@ -450,7 +466,9 @@ kubectl create secret generic github-token \
 | `rbac.clusterWide` | Create cluster-wide RBAC | `true` |
 | `serviceAccount.create` | Create service account | `true` |
 | `serviceAccount.name` | Service account name | `""` |
-| `github.token` | GitHub personal access token for PR creation | `""` |
+| `github.tokenSecret.enabled` | Enable GitHub token from secret | `false` |
+| `github.tokenSecret.name` | Name of secret containing GitHub token | `""` |
+| `github.tokenSecret.key` | Key name in secret containing token | `"token"` |
 | `github.repository` | GitHub repository in format 'owner/repo' | `""` |
 | `github.defaultBranch` | Override default branch detection | `""` |
 | `git.userName` | Git user name for commits | `fluxcd-helm-upgrader` |

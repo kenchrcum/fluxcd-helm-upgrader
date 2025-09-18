@@ -44,7 +44,10 @@ repo:
 
 # GitHub integration for PR creation
 github:
-  token: "ghp_your_github_token_here"
+  tokenSecret:
+    enabled: true
+    name: "github-token"
+    key: "token"
   repository: "your-org/flux-config"
   defaultBranch: "main"
 
