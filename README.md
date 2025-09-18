@@ -434,7 +434,7 @@ kubectl create secret generic github-token \
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `image.repository` | Docker image repository | `ghcr.io/kenchrcum/fluxcd-helm-upgrader` |
-| `image.tag` | Docker image tag | `0.3.0` |
+| `image.tag` | Docker image tag | `0.3.1` |
 | `image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `mode` | Deployment mode: `deployment` or `cronjob` | `deployment` |
 | `replicaCount` | Number of replicas (deployment mode only) | `1` |
