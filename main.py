@@ -34,7 +34,7 @@ class Config:
     )
     REQUEST_TIMEOUT = (5, 20)  # connect, read
     DEFAULT_HEADERS = {
-        "User-Agent": "fluxcd-helm-upgrader/0.2.0 (+https://github.com/kenchrcum/fluxcd-helm-upgrader)",
+        "User-Agent": "fluxcd-helm-upgrader/0.3.0 (+https://github.com/kenchrcum/fluxcd-helm-upgrader)",
         "Accept": "application/x-yaml, text/yaml, text/plain;q=0.9, */*;q=0.8",
     }
     
@@ -1850,9 +1850,9 @@ def main() -> None:
 
     # Log configuration once at startup
     if run_mode == "once":
-        logging.info("🚀 Starting FluxCD Helm upgrader v0.2.0 (single-run mode)")
+        logging.info("🚀 Starting FluxCD Helm upgrader v0.3.0 (single-run mode)")
     else:
-        logging.info("🚀 Starting FluxCD Helm upgrader v0.2.0 (continuous mode, interval: %ss)", interval)
+        logging.info("🚀 Starting FluxCD Helm upgrader v0.3.0 (continuous mode, interval: %ss)", interval)
     
     if Config.REPO_URL:
         logging.info("📂 Repository: %s", Config.REPO_URL)
