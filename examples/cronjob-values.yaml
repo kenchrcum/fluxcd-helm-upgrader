@@ -25,6 +25,7 @@ cronjob:
 
 # Application configuration
 logLevel: INFO
+intervalSeconds: 300
 includePrerelease: false
 
 # Git repository configuration

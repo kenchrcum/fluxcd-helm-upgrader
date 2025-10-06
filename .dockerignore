@@ -1,0 +1,78 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+README.md
+ROADMAP.md
+*.md
+
+# Development files
+build.sh
+deploy.sh
+examples/
+k8s/
+helm/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+/tmp/
+
+# Test files
+tests/
+test_*.py
+*_test.py
+conftest.py
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.cache
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+Dockerfile.*
+docker-compose*.yml
+
+# Other
+LICENSE
+Makefile
+requirements*.txt

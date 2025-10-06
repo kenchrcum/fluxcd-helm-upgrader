@@ -382,6 +382,142 @@ kubectl create secret generic flux-ssh-key \
 kubectl create secret generic github-token \
   --from-literal=token=your-github-token \
   -n flux-system
+
+## Complete Deployment Walkthrough
+
+This section provides a complete end-to-end example of deploying FluxCD Helm Upgrader with a real-world scenario.
+
+### Scenario: Monitor Helm Charts in a FluxCD Repository
+
+Let's assume you have a FluxCD repository at `https://github.com/my-org/flux-infrastructure` that contains HelmRelease manifests in the following structure:
+
+```
+flux-infrastructure/
+├── clusters/
+│   └── production/
+│       └── flux-system/
+│           └── helmrelease.yaml
+└── apps/
+    ├── monitoring/
+    │   └── helmrelease.yaml
+    └── ingress/
+        └── helmrelease.yaml
+```
+
+### Step 1: Prepare Secrets
+
+```bash
+# Create namespace for FluxCD Helm Upgrader
+kubectl create namespace flux-system
+
+# Generate SSH key for repository access (if private repo)
+ssh-keygen -t rsa -b 4096 -C "fluxcd-helm-upgrader" -f ~/.ssh/fluxcd-helm-upgrader -N ""
+
+# Add the public key to your repository's deploy keys
+echo "Add this public key to your GitHub repository deploy keys:"
+cat ~/.ssh/fluxcd-helm-upgrader.pub
+
+# Create SSH secret
+kubectl create secret generic fluxcd-helm-upgrader-ssh \
+  --from-file=id_rsa=~/.ssh/fluxcd-helm-upgrader \
+  --from-file=id_rsa.pub=~/.ssh/fluxcd-helm-upgrader.pub \
+  --from-literal=known_hosts="github.com ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEAq2A7hRGmdnm9tUDbO9IDSwBK6TbQa+PXYPCPy6rbTrTtw7PHkccKrpp0yVhp5HdEIcKr6pLlVDBfOLX9QUsyCOV0wzfjIJNlGEYsdlLJizHhbn2mUjvSAHQqZETYP81eFzLQNnPHt4EVVUh7VfDESU84KezmD5QlWpXLmvU31/yMf+Se8xhHTvKSCZIFImWwoG6mbUoWf9nzpIoaSjB+weqqUUmpaaasXVal72J+UX2B+2RPW3RcT0eOzQgqlJL3RKrTJvdsjE3JEAvGq3lGHSZXy28G3skua2SmVi/w4yCE6gbODqnTWlg7+wC604ydGXA8VJiS5ap43JXiUFFAaQ==" \
+  -n flux-system
+
+# Create GitHub token (follow the GitHub token creation steps above)
+kubectl create secret generic github-token \
+  --from-literal=token="ghp_your_github_token_here" \
+  -n flux-system
+```
+
+### Step 2: Deploy with Helm
+
+```bash
+# Deploy FluxCD Helm Upgrader with complete configuration
+helm install fluxcd-helm-upgrader ./helm/fluxcd-helm-upgrader \
+  --namespace flux-system \
+  --create-namespace \
+  --set repo.url=https://github.com/my-org/flux-infrastructure.git \
+  --set repo.branch=main \
+  --set repo.searchPattern="/clusters/*/flux-system/helmrelease*.yaml;/apps/*/*/helmrelease*.yaml" \
+  --set repo.sshKeySecret.enabled=true \
+  --set repo.sshKeySecret.name=fluxcd-helm-upgrader-ssh \
+  --set github.tokenSecret.enabled=true \
+  --set github.tokenSecret.name=github-token \
+  --set github.repository=my-org/flux-infrastructure \
+  --set git.userName="FluxCD Helm Upgrader Bot" \
+  --set git.userEmail="fluxcd-helm-upgrader@my-org.com" \
+  --set logLevel=INFO \
+  --set intervalSeconds=600
+```
+
+### Step 3: Verify Deployment
+
+```bash
+# Check deployment status
+kubectl get pods -n flux-system -l app.kubernetes.io/name=fluxcd-helm-upgrader
+
+# View logs to see scanning activity
+kubectl logs -n flux-system -l app.kubernetes.io/name=fluxcd-helm-upgrader -f
+
+# Expected output should show:
+# 🚀 Starting FluxCD Helm upgrader (interval: 600s)
+# 📂 Repository: https://github.com/my-org/flux-infrastructure
+# 🔑 SSH Keys: /home/app/.ssh/id_rsa, /home/app/.ssh/id_rsa.pub
+# 🐙 GitHub PRs enabled for: my-org/flux-infrastructure
+```
+
+### Step 4: Monitor Updates
+
+The upgrader will now:
+
+1. **Scan every 10 minutes** for HelmRelease manifests
+2. **Check for newer chart versions** in the configured repositories
+3. **Create GitHub branches** for updates (e.g., `update-production-prometheus-15.3.0`)
+4. **Update manifest files** with new versions while preserving formatting
+5. **Create Pull Requests** with detailed descriptions
+
+Example log output for an update:
+```
+📈 Update available: prometheus/prometheus (2.45.0 -> 2.46.0)
+🔄 Processing GitHub PR creation for prometheus/prometheus
+✅ Connected to GitHub as: fluxcd-helm-upgrader-bot
+Creating new branch: update-production-prometheus-2-46-0
+✅ Successfully created branch: update-production-prometheus-2-46-0
+✅ Successfully updated manifest with version 2.46.0
+✅ Changes committed with message: Update prometheus in namespace monitoring from 2.45.0 to 2.46.0
+✅ Successfully pushed branch: update-production-prometheus-2-46-0
+🎉 Successfully created PR for prometheus/prometheus: https://github.com/my-org/flux-infrastructure/pull/42
+```
+
+### Step 5: Customize Configuration
+
+For different repository structures, adjust the `searchPattern`:
+
+```yaml
+# For repositories with different structures
+repo:
+  searchPattern: "/infrastructure/*/helmrelease*.yaml;/applications/*/*/helmrelease*.yaml"
+
+# For multiple patterns (will be tried in order)
+repo:
+  searchPattern: "/clusters/{namespace}/flux-system/helmrelease*.yaml;/tenants/{namespace}/helmrelease*.yaml"
+```
+
+### Alternative: CronJob Mode for Production
+
+For production environments, consider using CronJob mode to reduce resource usage:
+
+```bash
+helm upgrade fluxcd-helm-upgrader ./helm/fluxcd-helm-upgrader \
+  --set mode=cronjob \
+  --set cronjob.schedule="0 */4 * * *" \
+  --set cronjob.successfulJobsHistoryLimit=5 \
+  --set cronjob.failedJobsHistoryLimit=3 \
+  --reuse-values
+```
+
+This runs the upgrader every 4 hours instead of continuously, which is more suitable for stable production environments.
 ```
 
 #### Common CronJob Schedules
@@ -645,6 +781,107 @@ logLevel: DEBUG
 ```
 
 This will show manifest paths for all HelmReleases, not just those with updates.
+
+### CronJob Mode Issues
+
+1. **Jobs Not Starting**: Check CronJob status and logs
+   ```bash
+   kubectl get cronjobs -l app.kubernetes.io/name=fluxcd-helm-upgrader
+   kubectl logs -l job-name=fluxcd-helm-upgrader --previous
+   ```
+
+2. **Jobs Failing**: Review pod logs and resource limits
+   ```bash
+   kubectl get jobs -l app.kubernetes.io/name=fluxcd-helm-upgrader
+   kubectl logs job/fluxcd-helm-upgrader-xxxxx
+   ```
+
+3. **Resource Constraints**: Increase resource limits for CronJob pods
+   ```yaml
+   resources:
+     limits:
+       cpu: 500m
+       memory: 512Mi
+     requests:
+       cpu: 100m
+       memory: 128Mi
+   ```
+
+4. **Schedule Conflicts**: If jobs overlap, use `concurrencyPolicy: Forbid`
+   ```yaml
+   cronjob:
+     concurrencyPolicy: Forbid  # Prevent overlapping executions
+     schedule: "0 */6 * * *"    # Run every 6 hours
+   ```
+
+5. **Missed Schedules**: Check `startingDeadlineSeconds` and cluster load
+   ```yaml
+   cronjob:
+     startingDeadlineSeconds: 600  # Allow 10 minutes for missed schedules
+   ```
+
+### Multi-Repository Scenarios
+
+1. **No Manifests Found**: Verify search patterns match your repository structure
+   ```bash
+   # Test pattern matching locally
+   find /path/to/repo -name "helmrelease*.yaml" -type f | head -10
+   ```
+
+2. **Permission Denied**: Check SSH key access to all configured repositories
+   ```bash
+   # Test each repository URL
+   git ls-remote https://github.com/org/repo1.git HEAD
+   git ls-remote https://github.com/org/repo2.git HEAD
+   ```
+
+3. **Mixed Repository Types**: Some repos use SSH, others HTTPS
+   ```yaml
+   # Configure different authentication per repository if needed
+   # Note: Currently only supports single repository configuration
+   repo:
+     url: https://github.com/org/main-repo.git  # Primary repository
+   ```
+
+### Resource and Performance Issues
+
+1. **High Memory Usage**: Monitor pod resources and adjust limits
+   ```bash
+   kubectl top pods -l app.kubernetes.io/name=fluxcd-helm-upgrader
+   ```
+
+2. **Slow Repository Cloning**: Use shallow clones and optimize patterns
+   ```yaml
+   repo:
+     cloneDir: /tmp/fluxcd-repo  # Ensure sufficient space
+   ```
+
+3. **Network Timeouts**: Increase timeout values for large repositories
+   ```yaml
+   # Adjust in application configuration if needed
+   # REQUEST_TIMEOUT = (10, 30)  # connect, read timeouts in seconds
+   ```
+
+### FluxCD Integration Issues
+
+1. **HelmRelease CRD Not Found**: Ensure FluxCD is properly installed
+   ```bash
+   kubectl get crd helmreleases.helm.toolkit.fluxcd.io
+   kubectl get crd helmrepositories.source.toolkit.fluxcd.io
+   kubectl get crd helmcharts.source.toolkit.fluxcd.io
+   ```
+
+2. **Version Compatibility**: Check FluxCD version compatibility
+   ```bash
+   kubectl get deployment -n flux-system -l app.kubernetes.io/name=helm-controller
+   # Ensure FluxCD version supports HelmRelease v2beta2/v2
+   ```
+
+3. **Namespace Isolation**: Verify upgrader can access Flux resources
+   ```bash
+   # Check if HelmReleases exist in expected namespaces
+   kubectl get helmreleases --all-namespaces | head -10
+   ```
 
 ## Contributing
 
