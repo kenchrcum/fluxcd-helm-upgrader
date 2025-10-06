@@ -75,4 +75,4 @@ docker-compose*.yml
 # Other
 LICENSE
 Makefile
-requirements*.txt
+# requirements*.txt  # Commented out to allow requirements.txt in Docker builds
