@@ -44,7 +44,7 @@ The following table lists the configurable parameters of the FluxCD Helm Upgrade
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `image.repository` | Docker image repository | `ghcr.io/kenchrcum/fluxcd-helm-upgrader` |
+| `image.repository` | Docker image repository | `kenchrcum/fluxcd-helm-upgrader` |
 | `image.tag` | Docker image tag | `0.3.2` |
 | `image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `mode` | Deployment mode: `deployment` or `cronjob` | `deployment` |
@@ -116,7 +116,7 @@ helm install fluxcd-helm-upgrader ./helm/fluxcd-helm-upgrader \
 kubectl create secret generic fluxcd-helm-upgrader-ssh \
   --from-file=id_rsa=/path/to/your/deploy-key \
   --from-file=id_rsa.pub=/path/to/your/deploy-key.pub \
-  --from-literal=known_hosts="github.com ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEAq2A7hRGmdnm9tUDbO9IDSwBK6TbQa+PXYPCPy6rbTrTtw7PHkccKrpp0yVhp5HdEIcKr6pLlVDBfOLX9QUsyCOV0wzfjIJNlGEYsdlLJizHhbn2mUjvSAHQqZETYP81eFzLQNnPHt4EVVUh7VfDESU84KezmD5QlWpXLmvU31/yMf+Se8xhHTvKSCZIFImWwoG6mbUoWf9nzpIoaSjB+weqqUUmpaaasXVal72J+UX2B+2RPW3RcT0eOzQgqlJL3RKrTJvdsjE3JEAvGq3lGHSZXy28G3skua2SmVi/w4yCE6gbODqnTWlg7+wC604ydGXA8VJiS5ap43JXiUFFAaQ=="
+  --from-literal=known_hosts="$(ssh-keyscan -t rsa github.com)"
 
 # Install with SSH configuration
 helm install fluxcd-helm-upgrader ./helm/fluxcd-helm-upgrader \

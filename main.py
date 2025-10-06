@@ -303,16 +303,33 @@ def setup_ssh_config() -> bool:
                     "Could not set permissions on known_hosts (likely read-only mount)"
                 )
         else:
-            # Try to create known_hosts with GitHub entry
+            # Try to create known_hosts with GitHub entry using ssh-keyscan
             try:
-                github_known_hosts = "github.com ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEAq2A7hRGmdnm9tUDbO9IDSwBK6TbQa+PXYPCPy6rbTrTtw7PHkccKrpp0yVhp5HdEIcKr6pLlVDBfOLX9QUsyCOV0wzfjIJNlGEYsdlLJizHhbn2mUjvSAHQqZETYP81eFzLQNnPHt4EVVUh7VfDESU84KezmD5QlWpXLmvU31/yMf+Se8xhHTvKSCZIFImWwoG6mbUoWf9nzpIoaSjB+weqqUUmpaaasXVal72J+UX2B+2RPW3RcT0eOzQgqlJL3RKrTJvdsjE3JEAvGq3lGHSZXy28G3skua2SmVi/w4yCE6gbODqnTWlg7+wC604ydGXA8VJiS5ap43JXiUFFAaQ=="
-                with open(known_hosts_path, "w") as f:
-                    f.write(github_known_hosts + "\n")
-                known_hosts_path.chmod(0o644)
-                logging.debug("Added GitHub to known hosts")
-            except OSError:
+                # Use ssh-keyscan to dynamically fetch GitHub's SSH host keys
+                result = subprocess.run(
+                    ["ssh-keyscan", "-t", "rsa", "github.com"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                
+                if result.returncode == 0 and result.stdout.strip():
+                    github_known_hosts = result.stdout.strip()
+                    with open(known_hosts_path, "w") as f:
+                        f.write(github_known_hosts + "\n")
+                    known_hosts_path.chmod(0o644)
+                    logging.debug("Added GitHub to known hosts using ssh-keyscan")
+                else:
+                    # Fallback to hardcoded key if ssh-keyscan fails
+                    logging.warning("ssh-keyscan failed, using fallback GitHub key")
+                    github_known_hosts = "github.com ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEAq2A7hRGmdnm9tUDbO9IDSwBK6TbQa+PXYPCPy6rbTrTtw7PHkccKrpp0yVhp5HdEIcKr6pLlVDBfOLX9QUsyCOV0wzfjIJNlGEYsdlLJizHhbn2mUjvSAHQqZETYP81eFzLQNnPHt4EVVUh7VfDESU84KezmD5QlWpXLmvU31/yMf+Se8xhHTvKSCZIFImWwoG6mbUoWf9nzpIoaSjB+weqqUUmpaaasXVal72J+UX2B+2RPW3RcT0eOzQgqlJL3RKrTJvdsjE3JEAvGq3lGHSZXy28G3skua2SmVi/w4yCE6gbODqnTWlg7+wC604ydGXA8VJiS5ap43JXiUFFAaQ=="
+                    with open(known_hosts_path, "w") as f:
+                        f.write(github_known_hosts + "\n")
+                    known_hosts_path.chmod(0o644)
+                    logging.debug("Added GitHub to known hosts using fallback key")
+            except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
                 logging.warning(
-                    "Could not create known_hosts file (read-only file system)"
+                    f"Could not create known_hosts file: {e}. SSH connections to GitHub may fail."
                 )
 
         # Configure git to use SSH with the correct key paths
