@@ -570,7 +570,7 @@ This runs the upgrader every 4 hours instead of continuously, which is more suit
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `image.repository` | Docker image repository | `kenchrcum/fluxcd-helm-upgrader` |
-| `image.tag` | Docker image tag | `0.4.0` |
+| `image.tag` | Docker image tag | `0.4.1` |
 | `image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `mode` | Deployment mode: `deployment` or `cronjob` | `deployment` |
 | `replicaCount` | Number of replicas (deployment mode only) | `1` |
