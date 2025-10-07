@@ -12,8 +12,8 @@ spec:
       targetPort: health
       protocol: TCP
       name: health
-    - port: {{ .Values.metrics.port | default 8081 }}
-      targetPort: metrics
+    - port: {{ .Values.metrics.port | default 8080 }}
+      targetPort: health
       protocol: TCP
       name: metrics
   selector:

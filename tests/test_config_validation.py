@@ -158,12 +158,12 @@ class TestConfigValidation:
             assert "REPO_SEARCH_PATTERN should start with '/'" in errors
 
     def test_validate_configuration_search_pattern_no_namespace(self):
-        """Test validation with search pattern missing namespace placeholder."""
+        """Test validation with search pattern without namespace placeholder (now valid)."""
         with patch.object(Config, 'REPO_SEARCH_PATTERN', '/components/*/helmrelease*.y*ml'), \
              patch.object(Config, 'GITHUB_TOKEN', 'test-token'):
             is_valid, errors = Config.validate_configuration()
-            assert is_valid is False
-            assert "REPO_SEARCH_PATTERN should contain '{namespace}' placeholder" in errors
+            assert is_valid is True
+            assert len(errors) == 0
 
     def test_validate_configuration_clone_dir_parent_not_exists(self):
         """Test validation with clone directory parent not existing."""

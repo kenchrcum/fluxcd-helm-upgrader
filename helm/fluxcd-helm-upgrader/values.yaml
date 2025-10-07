@@ -105,7 +105,7 @@ healthCheck:
 
 # Metrics configuration
 metrics:
-  port: 8081
+  port: 8080
   serviceMonitor:
     enabled: false
     interval: "30s"

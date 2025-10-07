@@ -134,8 +134,6 @@ class Config:
         if cls.REPO_SEARCH_PATTERN:
             if not cls.REPO_SEARCH_PATTERN.startswith('/'):
                 errors.append("REPO_SEARCH_PATTERN should start with '/'")
-            if '{namespace}' not in cls.REPO_SEARCH_PATTERN:
-                errors.append("REPO_SEARCH_PATTERN should contain '{namespace}' placeholder")
         
         # Validate clone directory
         if cls.REPO_CLONE_DIR:

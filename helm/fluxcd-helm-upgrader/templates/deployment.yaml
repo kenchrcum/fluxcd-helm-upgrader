@@ -35,7 +35,7 @@ spec:
               containerPort: {{ .Values.healthCheck.port | default 8080 }}
               protocol: TCP
             - name: metrics
-              containerPort: {{ .Values.metrics.port | default 8081 }}
+              containerPort: {{ .Values.metrics.port | default 8080 }}
               protocol: TCP
           env:
             - name: LOG_LEVEL
