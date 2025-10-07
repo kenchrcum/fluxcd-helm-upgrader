@@ -2,6 +2,24 @@ apiVersion: v1
 entries:
   fluxcd-helm-upgrader:
   - apiVersion: v2
+    appVersion: 0.4.0
+    created: "2025-10-07T07:03:32.627976988Z"
+    description: Periodically checks FluxCD HelmReleases and logs if newer chart versions
+      are available. Supports both continuous operation (Deployment) and scheduled
+      execution (CronJob).
+    digest: 212edbd339f1150cc42cc09bb05775286ce075cc51082eb96fccc48b8e533137
+    home: https://github.com/kenchrcum/fluxcd-helm-upgrader
+    maintainers:
+    - name: Kenneth
+      url: https://github.com/kenchrcum
+    name: fluxcd-helm-upgrader
+    sources:
+    - https://github.com/kenchrcum/fluxcd-helm-upgrader
+    type: application
+    urls:
+    - https://github.com/kenchrcum/fluxcd-helm-upgrader/releases/download/fluxcd-helm-upgrader-0.4.0/fluxcd-helm-upgrader-0.4.0.tgz
+    version: 0.4.0
+  - apiVersion: v2
     appVersion: 0.3.2
     created: "2025-10-06T15:09:25.224309307Z"
     description: Periodically checks FluxCD HelmReleases and logs if newer chart versions
@@ -140,4 +158,4 @@ entries:
     urls:
     - https://github.com/kenchrcum/fluxcd-helm-upgrader/releases/download/fluxcd-helm-upgrader-0.1.1/fluxcd-helm-upgrader-0.1.1.tgz
     version: 0.1.1
-generated: "2025-10-06T15:09:25.224337901Z"
+generated: "2025-10-07T07:03:32.628009589Z"
