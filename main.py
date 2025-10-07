@@ -84,6 +84,68 @@ class Config:
     def get_boolean_env(cls, key: str, default: bool = False) -> bool:
         """Helper to parse boolean environment variables."""
         return os.getenv(key, str(default)).lower() in ("1", "true", "yes", "on")
+    
+    @classmethod
+    def validate_configuration(cls) -> Tuple[bool, List[str]]:
+        """Validate configuration and return (is_valid, error_messages)."""
+        errors = []
+        
+        # Validate required environment variables
+        if not cls.REPO_URL and not cls.GITHUB_TOKEN:
+            errors.append("Either REPO_URL or GITHUB_TOKEN must be configured")
+            # Continue with other validations even if this fails
+        
+        # Validate REPO_URL format if provided
+        if cls.REPO_URL:
+            if not cls.REPO_URL.startswith(('http://', 'https://', 'git@')):
+                errors.append("REPO_URL must start with http://, https://, or git@")
+            if cls.REPO_URL.startswith('git@') and not cls.REPO_URL.endswith('.git'):
+                errors.append("SSH REPO_URL should end with .git")
+        
+        # Validate GITHUB_REPOSITORY format if provided
+        if cls.GITHUB_REPOSITORY:
+            if '/' not in cls.GITHUB_REPOSITORY:
+                errors.append("GITHUB_REPOSITORY must be in format 'owner/repo'")
+            elif cls.GITHUB_REPOSITORY.count('/') != 1:
+                errors.append("GITHUB_REPOSITORY must contain exactly one '/' separator")
+        
+        # Validate SSH key paths if REPO_URL is provided
+        if cls.REPO_URL and cls.REPO_URL.startswith('git@'):
+            if not os.path.exists(cls.SSH_PRIVATE_KEY_PATH):
+                errors.append(f"SSH private key not found: {cls.SSH_PRIVATE_KEY_PATH}")
+            elif not os.access(cls.SSH_PRIVATE_KEY_PATH, os.R_OK):
+                errors.append(f"SSH private key not readable: {cls.SSH_PRIVATE_KEY_PATH}")
+        
+        # Validate interval
+        if cls.DEFAULT_INTERVAL_SECONDS < 60:
+            errors.append("INTERVAL_SECONDS should be at least 60 seconds")
+        elif cls.DEFAULT_INTERVAL_SECONDS > 86400:
+            errors.append("INTERVAL_SECONDS should not exceed 86400 seconds (24 hours)")
+        
+        # Validate ports
+        if cls.HEALTH_CHECK_PORT < 1024 or cls.HEALTH_CHECK_PORT > 65535:
+            errors.append("HEALTH_CHECK_PORT must be between 1024 and 65535")
+        if cls.METRICS_PORT < 1024 or cls.METRICS_PORT > 65535:
+            errors.append("METRICS_PORT must be between 1024 and 65535")
+        if cls.HEALTH_CHECK_PORT == cls.METRICS_PORT:
+            errors.append("HEALTH_CHECK_PORT and METRICS_PORT must be different")
+        
+        # Validate search pattern
+        if cls.REPO_SEARCH_PATTERN:
+            if not cls.REPO_SEARCH_PATTERN.startswith('/'):
+                errors.append("REPO_SEARCH_PATTERN should start with '/'")
+            if '{namespace}' not in cls.REPO_SEARCH_PATTERN:
+                errors.append("REPO_SEARCH_PATTERN should contain '{namespace}' placeholder")
+        
+        # Validate clone directory
+        if cls.REPO_CLONE_DIR:
+            clone_path = Path(cls.REPO_CLONE_DIR)
+            if not clone_path.parent.exists():
+                errors.append(f"Parent directory of REPO_CLONE_DIR does not exist: {clone_path.parent}")
+            elif not os.access(clone_path.parent, os.W_OK):
+                errors.append(f"Parent directory of REPO_CLONE_DIR is not writable: {clone_path.parent}")
+        
+        return len(errors) == 0, errors
 
 
 # Prometheus metrics
@@ -260,7 +322,10 @@ def parse_github_repository(repo_str: str) -> Tuple[str, str]:
     """Parse GitHub repository string into owner and repo name."""
     if "/" not in repo_str:
         raise ValueError("GITHUB_REPOSITORY must be in format 'owner/repo'")
-    return repo_str.split("/", 1)
+    parts = repo_str.split("/")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise ValueError("GITHUB_REPOSITORY must be in format 'owner/repo'")
+    return parts[0], parts[1]
 
 
 def safe_run_command(cmd: List[str], **kwargs) -> Tuple[int, str, str]:
@@ -2127,6 +2192,17 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
 def main() -> None:
     """Main application entry point with optimized configuration."""
     configure_logging()
+    
+    # Validate configuration
+    is_valid, errors = Config.validate_configuration()
+    if not is_valid:
+        logging.error("❌ Configuration validation failed:")
+        for error in errors:
+            logging.error("  - %s", error)
+        logging.error("Please fix the configuration errors and restart the application.")
+        sys.exit(1)
+    
+    logging.info("✅ Configuration validation passed")
     
     # Initialize metrics
     initialize_metrics()
