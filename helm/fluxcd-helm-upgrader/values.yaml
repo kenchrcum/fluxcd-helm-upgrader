@@ -54,6 +54,20 @@ logLevel: INFO
 intervalSeconds: 300
 includePrerelease: false
 
+# Health check configuration
+healthCheck:
+  port: 8080
+  livenessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
 podAnnotations: {}
 
 # Git repository configuration to locate HelmRelease manifests in Flux repo

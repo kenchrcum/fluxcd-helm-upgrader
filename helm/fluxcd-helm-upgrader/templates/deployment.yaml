@@ -80,6 +80,10 @@ spec:
             - name: GIT_FORCE_PUSH
               value: {{ .Values.git.forcePush | quote }}
             {{- end }}
+            - name: HEALTH_CHECK_PORT
+              value: {{ .Values.healthCheck.port | default 8080 | quote }}
+            - name: HEALTH_CHECK_HOST
+              value: "0.0.0.0"
           volumeMounts:
             {{- if and .Values.repo.sshKeySecret.enabled .Values.repo.sshKeySecret.name }}
             - name: ssh-keys
@@ -88,6 +92,22 @@ spec:
             {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.healthCheck.port | default 8080 }}
+            initialDelaySeconds: {{ .Values.healthCheck.livenessProbe.initialDelaySeconds | default 30 }}
+            periodSeconds: {{ .Values.healthCheck.livenessProbe.periodSeconds | default 10 }}
+            timeoutSeconds: {{ .Values.healthCheck.livenessProbe.timeoutSeconds | default 5 }}
+            failureThreshold: {{ .Values.healthCheck.livenessProbe.failureThreshold | default 3 }}
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: {{ .Values.healthCheck.port | default 8080 }}
+            initialDelaySeconds: {{ .Values.healthCheck.readinessProbe.initialDelaySeconds | default 5 }}
+            periodSeconds: {{ .Values.healthCheck.readinessProbe.periodSeconds | default 5 }}
+            timeoutSeconds: {{ .Values.healthCheck.readinessProbe.timeoutSeconds | default 3 }}
+            failureThreshold: {{ .Values.healthCheck.readinessProbe.failureThreshold | default 3 }}
       volumes:
         {{- if and .Values.repo.sshKeySecret.enabled .Values.repo.sshKeySecret.name }}
         - name: ssh-keys

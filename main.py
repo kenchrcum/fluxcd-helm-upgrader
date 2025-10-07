@@ -4,9 +4,12 @@ import logging
 import subprocess
 import shutil
 import glob
+import threading
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse, quote
 from typing import Any, Dict, List, Optional, Tuple
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import json
 
 import requests
 import yaml
@@ -38,6 +41,149 @@ class Config:
         "Accept": "application/x-yaml, text/yaml, text/plain;q=0.9, */*;q=0.8",
     }
     
+    # Health check configuration
+    HEALTH_CHECK_PORT = int(os.getenv("HEALTH_CHECK_PORT", "8080"))
+    HEALTH_CHECK_HOST = os.getenv("HEALTH_CHECK_HOST", "0.0.0.0")
+
+    # Git repository configuration
+    REPO_URL = os.getenv("REPO_URL", "").strip()
+    REPO_BRANCH = os.getenv("REPO_BRANCH", "").strip()
+    REPO_SEARCH_PATTERN = os.getenv(
+        "REPO_SEARCH_PATTERN",
+        "/components/{namespace}/*/helmrelease*.y*ml",
+    ).strip()
+    REPO_CLONE_DIR = os.getenv("REPO_CLONE_DIR", "/tmp/fluxcd-repo").strip()
+    
+    # SSH configuration
+    SSH_PRIVATE_KEY_PATH = os.getenv(
+        "SSH_PRIVATE_KEY_PATH", "/home/app/.ssh/private_key"
+    ).strip()
+    SSH_PUBLIC_KEY_PATH = os.getenv(
+        "SSH_PUBLIC_KEY_PATH", "/home/app/.ssh/public_key"
+    ).strip()
+    SSH_KNOWN_HOSTS_PATH = os.getenv(
+        "SSH_KNOWN_HOSTS_PATH", "/home/app/.ssh/known_hosts"
+    ).strip()
+    
+    # GitHub configuration
+    GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
+    GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "").strip()
+    GITHUB_DEFAULT_BRANCH = os.getenv("GITHUB_DEFAULT_BRANCH", "").strip()
+    GIT_FORCE_PUSH = os.getenv("GIT_FORCE_PUSH", "false").lower() in (
+        "1", "true", "yes", "on"
+    )
+    
+    @classmethod
+    def get_boolean_env(cls, key: str, default: bool = False) -> bool:
+        """Helper to parse boolean environment variables."""
+        return os.getenv(key, str(default)).lower() in ("1", "true", "yes", "on")
+
+
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    """HTTP handler for health check endpoints."""
+    
+    def do_GET(self):
+        """Handle GET requests for health check endpoints."""
+        if self.path == "/health":
+            self.handle_health()
+        elif self.path == "/ready":
+            self.handle_readiness()
+        else:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"Not Found")
+    
+    def handle_health(self):
+        """Handle liveness probe - basic application health."""
+        try:
+            # Basic health check - application is running
+            response = {
+                "status": "healthy",
+                "timestamp": time.time(),
+                "version": "0.3.2"
+            }
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(response).encode())
+        except Exception as e:
+            logging.error("Health check failed: %s", e)
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(b"Internal Server Error")
+    
+    def handle_readiness(self):
+        """Handle readiness probe - application is ready to serve requests."""
+        try:
+            # Check if Kubernetes client is available
+            try:
+                config.load_incluster_config()
+                client.CustomObjectsApi()
+                k8s_ready = True
+            except Exception:
+                k8s_ready = False
+            
+            response = {
+                "status": "ready" if k8s_ready else "not_ready",
+                "timestamp": time.time(),
+                "version": "0.3.2",
+                "kubernetes": k8s_ready
+            }
+            
+            status_code = 200 if k8s_ready else 503
+            self.send_response(status_code)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(response).encode())
+        except Exception as e:
+            logging.error("Readiness check failed: %s", e)
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(b"Internal Server Error")
+    
+    def log_message(self, format, *args):
+        """Suppress default HTTP server logging."""
+        pass
+
+
+def start_health_server():
+    """Start the health check HTTP server in a background thread."""
+    try:
+        server = HTTPServer((Config.HEALTH_CHECK_HOST, Config.HEALTH_CHECK_PORT), HealthCheckHandler)
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        logging.info("🏥 Health check server started on %s:%d", Config.HEALTH_CHECK_HOST, Config.HEALTH_CHECK_PORT)
+        return server
+    except Exception as e:
+        logging.error("Failed to start health check server: %s", e)
+        return None
+
+
+class Config:
+    """Centralized configuration management."""
+    
+    # FluxCD API configuration
+    HELM_RELEASE_GROUP = "helm.toolkit.fluxcd.io"
+    SOURCE_GROUP = "source.toolkit.fluxcd.io"
+    # Try newer versions first; gracefully fall back
+    HELM_RELEASE_VERSIONS = ["v2", "v2beta2", "v2beta1"]
+    SOURCE_VERSIONS = ["v1", "v1beta2", "v1beta1"]
+    
+    # Application configuration
+    DEFAULT_INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", "300"))
+    INCLUDE_PRERELEASE = os.getenv("INCLUDE_PRERELEASE", "false").lower() in (
+        "1", "true", "yes", "on"
+    )
+    REQUEST_TIMEOUT = (5, 20)  # connect, read
+    DEFAULT_HEADERS = {
+        "User-Agent": "fluxcd-helm-upgrader/0.3.2 (+https://github.com/kenchrcum/fluxcd-helm-upgrader)",
+        "Accept": "application/x-yaml, text/yaml, text/plain;q=0.9, */*;q=0.8",
+    }
+    
+    # Health check configuration
+    HEALTH_CHECK_PORT = int(os.getenv("HEALTH_CHECK_PORT", "8080"))
+    HEALTH_CHECK_HOST = os.getenv("HEALTH_CHECK_HOST", "0.0.0.0")
+
     # Git repository configuration
     REPO_URL = os.getenv("REPO_URL", "").strip()
     REPO_BRANCH = os.getenv("REPO_BRANCH", "").strip()
@@ -1858,6 +2004,9 @@ def main() -> None:
     configure_logging()
     coapi = load_kube_config()
     interval = Config.DEFAULT_INTERVAL_SECONDS
+    
+    # Start health check server
+    start_health_server()
     
     # Check if running in single-run mode (for CronJob)
     run_mode = os.getenv("RUN_MODE", "continuous").lower()

@@ -26,6 +26,10 @@ spec:
               value: "300"
             - name: INCLUDE_PRERELEASE
               value: "false"
+            - name: HEALTH_CHECK_PORT
+              value: "8080"
+            - name: HEALTH_CHECK_HOST
+              value: "0.0.0.0"
           resources:
             limits:
               cpu: 200m
@@ -33,3 +37,19 @@ spec:
             requests:
               cpu: 50m
               memory: 64Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3

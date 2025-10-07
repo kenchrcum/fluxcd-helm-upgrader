@@ -6,37 +6,41 @@ This roadmap outlines the planned improvements and enhancements for the FluxCD H
 
 ## 🔴 Critical Issues (Must Fix)
 
-### 1. Missing Essential Files
+### 1. Missing Essential Files ✅ **COMPLETED**
 - **Issue**: `.gitignore` and `.dockerignore` files are referenced in README but don't exist
 - **Impact**: Development workflow incomplete, potential security issues
 - **Solution**: Create proper `.gitignore` and `.dockerignore` files
 
-### 2. Inconsistent Image Registry References
+### 2. Inconsistent Image Registry References ✅ **COMPLETED**
 - **Issue**: Mixed references between `kenchrcum/fluxcd-helm-upgrader` and `ghcr.io/kenchrcum/fluxcd-helm-upgrader`
 - **Impact**: Confusion in deployment, potential pull failures
 - **Solution**: Standardize on `ghcr.io/kenchrcum/fluxcd-helm-upgrader` throughout
 
-### 3. Hardcoded GitHub RSA Key
+### 3. Hardcoded GitHub RSA Key ✅ **COMPLETED**
 - **Issue**: GitHub's SSH host key is hardcoded in `main.py` (line 308)
 - **Impact**: Will break when GitHub rotates keys, security risk
 - **Solution**: Implement dynamic key fetching or use SSH keyscan
 
 ## 🟡 High Priority (Should Fix)
 
-### 4. RBAC Security Enhancement
+### 4. RBAC Security Enhancement ✅ **COMPLETED**
 - **Issue**: Cluster-wide RBAC when namespace-scoped might suffice for most use cases
 - **Impact**: Over-privileged access, security risk in multi-tenant clusters
-- **Solution**: Add option for namespace-scoped RBAC with `rbac.clusterWide: false`
+- **Solution**: ✅ **ALREADY IMPLEMENTED** - Option for namespace-scoped RBAC with `rbac.clusterWide: false`
 
-### 5. Health Checks Missing
+### 5. Health Checks Missing ✅ **COMPLETED**
 - **Issue**: No liveness/readiness probes in Kubernetes manifests
 - **Impact**: Poor Kubernetes integration, no failure detection
-- **Solution**: Add health check endpoints and probes
+- **Solution**: ✅ **IMPLEMENTED** - Added health check endpoints (`/health`, `/ready`) and probes
 
-### 6. Single Point of Failure
+### 6. Single Point of Failure ✅ **RESOLVED**
 - **Issue**: Default single replica configuration
 - **Impact**: Service unavailable during pod restarts, rolling updates
-- **Solution**: Add `replicaCount` option and HPA support
+- **Solution**: **DESIGN DECISION** - Single replica is acceptable for this use case:
+  - Application creates GitHub PRs which are manually reviewed and merged
+  - Brief downtime during pod restarts is acceptable (seconds to minutes)
+  - Avoids complexity of state management, distributed locking, and coordination
+  - Resource limits and health checks provide sufficient reliability
 
 ## 🟢 Medium Priority (Nice to Have)
 
@@ -104,13 +108,13 @@ This roadmap outlines the planned improvements and enhancements for the FluxCD H
 1. Create missing `.gitignore` and `.dockerignore` files
 2. Fix image registry inconsistencies
 3. Replace hardcoded GitHub SSH key with dynamic fetching
-4. Add basic health checks
+4. ✅ Add basic health checks (completed)
 
 ### Phase 2: Security and Reliability (Week 3-4)
-1. Implement namespace-scoped RBAC option
+1. ✅ Implement namespace-scoped RBAC option (already implemented)
 2. Add configuration validation
-3. Increase default replica count to 2
-4. Add resource limits and requests
+3. ✅ Single replica design decision documented
+4. ✅ Add resource limits and requests (already implemented)
 
 ### Phase 3: Observability and Testing (Week 5-6)
 1. Add Prometheus metrics and structured logging

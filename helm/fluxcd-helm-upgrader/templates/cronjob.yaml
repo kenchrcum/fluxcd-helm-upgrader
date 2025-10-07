@@ -96,6 +96,10 @@ spec:
                 - name: GIT_FORCE_PUSH
                   value: {{ .Values.git.forcePush | quote }}
                 {{- end }}
+                - name: HEALTH_CHECK_PORT
+                  value: {{ .Values.healthCheck.port | default 8080 | quote }}
+                - name: HEALTH_CHECK_HOST
+                  value: "0.0.0.0"
               volumeMounts:
                 {{- if and .Values.repo.sshKeySecret.enabled .Values.repo.sshKeySecret.name }}
                 - name: ssh-keys
