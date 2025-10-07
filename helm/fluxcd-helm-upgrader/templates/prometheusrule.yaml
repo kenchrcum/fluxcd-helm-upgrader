@@ -1,0 +1,77 @@
+{{- if and (eq .Values.mode "deployment") .Values.metrics.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "fluxcd-helm-upgrader.fullname" . }}
+  labels:
+    {{- include "fluxcd-helm-upgrader.labels" . | nindent 4 }}
+    {{- with .Values.metrics.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+  - name: fluxcd-helm-upgrader.rules
+    rules:
+    - alert: FluxCDHelmUpgraderDown
+      expr: up{job="{{ include "fluxcd-helm-upgrader.fullname" . }}"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "FluxCD Helm Upgrader is down"
+        description: "FluxCD Helm Upgrader has been down for more than 1 minute."
+
+    - alert: FluxCDHelmUpgraderHighErrorRate
+      expr: rate(fluxcd_helm_upgrader_errors_total[5m]) > 0.1
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "FluxCD Helm Upgrader high error rate"
+        description: "FluxCD Helm Upgrader is experiencing a high error rate: {{ $value }} errors per second."
+
+    - alert: FluxCDHelmUpgraderNoSuccessfulChecks
+      expr: time() - fluxcd_helm_upgrader_last_successful_check_timestamp > 600
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "FluxCD Helm Upgrader no successful checks"
+        description: "FluxCD Helm Upgrader has not completed a successful check in the last 10 minutes."
+
+    - alert: FluxCDHelmUpgraderSlowCheckCycles
+      expr: histogram_quantile(0.95, rate(fluxcd_helm_upgrader_check_cycle_duration_seconds_bucket[5m])) > 300
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "FluxCD Helm Upgrader slow check cycles"
+        description: "FluxCD Helm Upgrader check cycles are taking longer than 5 minutes (95th percentile: {{ $value }}s)."
+
+    - alert: FluxCDHelmUpgraderManyOutdatedReleases
+      expr: fluxcd_helm_upgrader_helm_releases_outdated > 10
+      for: 5m
+      labels:
+        severity: info
+      annotations:
+        summary: "Many HelmReleases need updates"
+        description: "There are {{ $value }} HelmReleases that need updates."
+
+    - alert: FluxCDHelmUpgraderGitOperationFailures
+      expr: rate(fluxcd_helm_upgrader_git_operations_total{status="failed"}[5m]) > 0.05
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "FluxCD Helm Upgrader Git operation failures"
+        description: "FluxCD Helm Upgrader is experiencing Git operation failures: {{ $value }} failures per second."
+
+    - alert: FluxCDHelmUpgraderGitHubAPIFailures
+      expr: rate(fluxcd_helm_upgrader_github_api_calls_total{status="failed"}[5m]) > 0.05
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "FluxCD Helm Upgrader GitHub API failures"
+        description: "FluxCD Helm Upgrader is experiencing GitHub API failures: {{ $value }} failures per second."
+{{- end }}

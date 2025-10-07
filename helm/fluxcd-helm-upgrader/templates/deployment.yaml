@@ -30,6 +30,13 @@ spec:
         - name: app
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.healthCheck.port | default 8080 }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.metrics.port | default 8081 }}
+              protocol: TCP
           env:
             - name: LOG_LEVEL
               value: {{ .Values.logLevel | quote }}
@@ -84,6 +91,12 @@ spec:
               value: {{ .Values.healthCheck.port | default 8080 | quote }}
             - name: HEALTH_CHECK_HOST
               value: "0.0.0.0"
+            - name: METRICS_PORT
+              value: {{ .Values.metrics.port | default 8081 | quote }}
+            - name: METRICS_HOST
+              value: "0.0.0.0"
+            - name: LOG_FORMAT
+              value: {{ .Values.logging.format | default "text" | quote }}
           volumeMounts:
             {{- if and .Values.repo.sshKeySecret.enabled .Values.repo.sshKeySecret.name }}
             - name: ssh-keys

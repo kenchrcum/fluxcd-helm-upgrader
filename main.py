@@ -10,6 +10,8 @@ from urllib.parse import urlparse, urlunparse, quote
 from typing import Any, Dict, List, Optional, Tuple
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
+import sys
+from datetime import datetime
 
 import requests
 import yaml
@@ -18,6 +20,7 @@ import re
 from kubernetes import client, config
 from kubernetes.client import ApiException
 from github import Github, GithubException
+from prometheus_client import Counter, Histogram, Gauge, Info, generate_latest, CONTENT_TYPE_LATEST
 
 
 class Config:
@@ -44,6 +47,10 @@ class Config:
     # Health check configuration
     HEALTH_CHECK_PORT = int(os.getenv("HEALTH_CHECK_PORT", "8080"))
     HEALTH_CHECK_HOST = os.getenv("HEALTH_CHECK_HOST", "0.0.0.0")
+    
+    # Metrics configuration
+    METRICS_PORT = int(os.getenv("METRICS_PORT", "8081"))
+    METRICS_HOST = os.getenv("METRICS_HOST", "0.0.0.0")
 
     # Git repository configuration
     REPO_URL = os.getenv("REPO_URL", "").strip()
@@ -79,6 +86,24 @@ class Config:
         return os.getenv(key, str(default)).lower() in ("1", "true", "yes", "on")
 
 
+# Prometheus metrics
+METRICS = {
+    'helm_releases_total': Gauge('fluxcd_helm_upgrader_helm_releases_total', 'Total number of HelmReleases scanned'),
+    'helm_releases_outdated': Gauge('fluxcd_helm_upgrader_helm_releases_outdated', 'Number of HelmReleases with updates available'),
+    'helm_releases_up_to_date': Gauge('fluxcd_helm_upgrader_helm_releases_up_to_date', 'Number of HelmReleases that are up to date'),
+    'updates_processed_total': Counter('fluxcd_helm_upgrader_updates_processed_total', 'Total number of updates processed', ['namespace', 'name', 'status']),
+    'pull_requests_created_total': Counter('fluxcd_helm_upgrader_pull_requests_created_total', 'Total number of pull requests created', ['namespace', 'name']),
+    'git_operations_total': Counter('fluxcd_helm_upgrader_git_operations_total', 'Total number of git operations', ['operation', 'status']),
+    'kubernetes_api_calls_total': Counter('fluxcd_helm_upgrader_kubernetes_api_calls_total', 'Total number of Kubernetes API calls', ['operation', 'status']),
+    'github_api_calls_total': Counter('fluxcd_helm_upgrader_github_api_calls_total', 'Total number of GitHub API calls', ['operation', 'status']),
+    'repository_index_fetches_total': Counter('fluxcd_helm_upgrader_repository_index_fetches_total', 'Total number of repository index fetches', ['status']),
+    'check_cycle_duration_seconds': Histogram('fluxcd_helm_upgrader_check_cycle_duration_seconds', 'Duration of check cycles in seconds'),
+    'last_successful_check_timestamp': Gauge('fluxcd_helm_upgrader_last_successful_check_timestamp', 'Timestamp of last successful check'),
+    'application_info': Info('fluxcd_helm_upgrader_info', 'Application information'),
+    'errors_total': Counter('fluxcd_helm_upgrader_errors_total', 'Total number of errors', ['error_type', 'component']),
+}
+
+
 class HealthCheckHandler(BaseHTTPRequestHandler):
     """HTTP handler for health check endpoints."""
     
@@ -88,6 +113,8 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             self.handle_health()
         elif self.path == "/ready":
             self.handle_readiness()
+        elif self.path == "/metrics":
+            self.handle_metrics()
         else:
             self.send_response(404)
             self.end_headers()
@@ -141,9 +168,43 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"Internal Server Error")
     
+    def handle_metrics(self):
+        """Handle Prometheus metrics endpoint."""
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", CONTENT_TYPE_LATEST)
+            self.end_headers()
+            self.wfile.write(generate_latest())
+        except Exception as e:
+            logging.error("Metrics endpoint failed: %s", e)
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(b"Internal Server Error")
+    
     def log_message(self, format, *args):
         """Suppress default HTTP server logging."""
         pass
+
+
+def initialize_metrics():
+    """Initialize Prometheus metrics with application information."""
+    try:
+        # Set application info
+        METRICS['application_info'].info({
+            'version': '0.3.2',
+            'component': 'fluxcd-helm-upgrader',
+            'description': 'FluxCD Helm Release Upgrader'
+        })
+        
+        # Initialize counters to 0
+        METRICS['helm_releases_total'].set(0)
+        METRICS['helm_releases_outdated'].set(0)
+        METRICS['helm_releases_up_to_date'].set(0)
+        METRICS['last_successful_check_timestamp'].set(0)
+        
+        logging.info("Prometheus metrics initialized", extra={"metrics_port": Config.METRICS_PORT})
+    except Exception as e:
+        logging.error("Failed to initialize metrics: %s", e, extra={"error_type": "metrics_init", "component": "metrics"})
 
 
 def start_health_server():
@@ -157,65 +218,6 @@ def start_health_server():
     except Exception as e:
         logging.error("Failed to start health check server: %s", e)
         return None
-
-
-class Config:
-    """Centralized configuration management."""
-    
-    # FluxCD API configuration
-    HELM_RELEASE_GROUP = "helm.toolkit.fluxcd.io"
-    SOURCE_GROUP = "source.toolkit.fluxcd.io"
-    # Try newer versions first; gracefully fall back
-    HELM_RELEASE_VERSIONS = ["v2", "v2beta2", "v2beta1"]
-    SOURCE_VERSIONS = ["v1", "v1beta2", "v1beta1"]
-    
-    # Application configuration
-    DEFAULT_INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", "300"))
-    INCLUDE_PRERELEASE = os.getenv("INCLUDE_PRERELEASE", "false").lower() in (
-        "1", "true", "yes", "on"
-    )
-    REQUEST_TIMEOUT = (5, 20)  # connect, read
-    DEFAULT_HEADERS = {
-        "User-Agent": "fluxcd-helm-upgrader/0.3.2 (+https://github.com/kenchrcum/fluxcd-helm-upgrader)",
-        "Accept": "application/x-yaml, text/yaml, text/plain;q=0.9, */*;q=0.8",
-    }
-    
-    # Health check configuration
-    HEALTH_CHECK_PORT = int(os.getenv("HEALTH_CHECK_PORT", "8080"))
-    HEALTH_CHECK_HOST = os.getenv("HEALTH_CHECK_HOST", "0.0.0.0")
-
-    # Git repository configuration
-    REPO_URL = os.getenv("REPO_URL", "").strip()
-    REPO_BRANCH = os.getenv("REPO_BRANCH", "").strip()
-    REPO_SEARCH_PATTERN = os.getenv(
-        "REPO_SEARCH_PATTERN",
-        "/components/{namespace}/*/helmrelease*.y*ml",
-    ).strip()
-    REPO_CLONE_DIR = os.getenv("REPO_CLONE_DIR", "/tmp/fluxcd-repo").strip()
-    
-    # SSH configuration
-    SSH_PRIVATE_KEY_PATH = os.getenv(
-        "SSH_PRIVATE_KEY_PATH", "/home/app/.ssh/private_key"
-    ).strip()
-    SSH_PUBLIC_KEY_PATH = os.getenv(
-        "SSH_PUBLIC_KEY_PATH", "/home/app/.ssh/public_key"
-    ).strip()
-    SSH_KNOWN_HOSTS_PATH = os.getenv(
-        "SSH_KNOWN_HOSTS_PATH", "/home/app/.ssh/known_hosts"
-    ).strip()
-    
-    # GitHub configuration
-    GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
-    GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "").strip()
-    GITHUB_DEFAULT_BRANCH = os.getenv("GITHUB_DEFAULT_BRANCH", "").strip()
-    GIT_FORCE_PUSH = os.getenv("GIT_FORCE_PUSH", "false").lower() in (
-        "1", "true", "yes", "on"
-    )
-    
-    @classmethod
-    def get_boolean_env(cls, key: str, default: bool = False) -> bool:
-        """Helper to parse boolean environment variables."""
-        return os.getenv(key, str(default)).lower() in ("1", "true", "yes", "on")
 
 
 # Legacy global constants for backward compatibility
@@ -567,11 +569,63 @@ def convert_to_ssh_url(url: str) -> str:
 
 
 def configure_logging() -> None:
+    """Configure structured logging with JSON format."""
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
+    log_format = os.getenv("LOG_FORMAT", "text").lower()
+    
+    if log_format == "json":
+        # JSON structured logging
+        import json
+        import sys
+        
+        class JSONFormatter(logging.Formatter):
+            def format(self, record):
+                log_entry = {
+                    "timestamp": datetime.fromtimestamp(record.created).isoformat(),
+                    "level": record.levelname,
+                    "logger": record.name,
+                    "message": record.getMessage(),
+                    "module": record.module,
+                    "function": record.funcName,
+                    "line": record.lineno,
+                }
+                
+                # Add exception info if present
+                if record.exc_info:
+                    log_entry["exception"] = self.formatException(record.exc_info)
+                
+                # Add extra fields from record
+                for key, value in record.__dict__.items():
+                    if key not in ['name', 'msg', 'args', 'levelname', 'levelno', 'pathname', 
+                                 'filename', 'module', 'lineno', 'funcName', 'created', 'msecs',
+                                 'relativeCreated', 'thread', 'threadName', 'processName', 'process',
+                                 'getMessage', 'exc_info', 'exc_text', 'stack_info']:
+                        log_entry[key] = value
+                
+                return json.dumps(log_entry)
+        
+        # Configure root logger
+        root_logger = logging.getLogger()
+        root_logger.setLevel(getattr(logging, log_level))
+        
+        # Remove existing handlers
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
+        
+        # Add console handler with JSON formatter
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(JSONFormatter())
+        root_logger.addHandler(console_handler)
+        
+        logging.info("Structured JSON logging enabled", extra={"log_format": "json", "log_level": log_level})
+    else:
+        # Standard text logging
+        logging.basicConfig(
+            level=getattr(logging, log_level),
+            format="%(asctime)s %(levelname)s [%(name)s:%(funcName)s:%(lineno)d] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
+        logging.info("Standard text logging enabled", extra={"log_format": "text", "log_level": log_level})
 
 
 # Function removed - now part of GitHubManager class
@@ -1079,8 +1133,10 @@ def commit_and_push_changes(
         # Add the changed file
         code, out, err = _run_git_command(["add", "."], cwd=repo_dir)
         if code != 0:
-            logging.error("Failed to add files to git: %s", err.strip())
+            logging.error("Failed to add files to git: %s", err.strip(), extra={"operation": "add", "status": "failed"})
+            METRICS['git_operations_total'].labels(operation="add", status="failed").inc()
             return False
+        METRICS['git_operations_total'].labels(operation="add", status="success").inc()
 
         # Check if there are any changes to commit
         code, out, err = _run_git_command(["status", "--porcelain"], cwd=repo_dir)
@@ -1098,8 +1154,10 @@ def commit_and_push_changes(
             ["commit", "-m", commit_message], cwd=repo_dir
         )
         if code != 0:
-            logging.error("Failed to commit changes: %s", err.strip())
+            logging.error("Failed to commit changes: %s", err.strip(), extra={"operation": "commit", "status": "failed"})
+            METRICS['git_operations_total'].labels(operation="commit", status="failed").inc()
             return False
+        METRICS['git_operations_total'].labels(operation="commit", status="success").inc()
 
         logging.info("✅ Changes committed with message: %s", commit_message)
 
@@ -1119,12 +1177,14 @@ def commit_and_push_changes(
 
         code, out, err = _run_git_command(push_args, cwd=repo_dir)
         if code != 0:
-            logging.error("Failed to push branch %s: %s", branch_name, err.strip())
+            logging.error("Failed to push branch %s: %s", branch_name, err.strip(), extra={"operation": "push", "status": "failed"})
+            METRICS['git_operations_total'].labels(operation="push", status="failed").inc()
             if "non-fast-forward" in err or "Updates were rejected" in err:
                 logging.info(
                     "💡 Tip: Set GIT_FORCE_PUSH=true to force push existing branches"
                 )
             return False
+        METRICS['git_operations_total'].labels(operation="push", status="success").inc()
 
         logging.info("✅ Successfully pushed branch: %s", branch_name)
         return True
@@ -1253,6 +1313,7 @@ Please review the changes and test in a development environment before merging.
                 )
 
                 logging.info("✅ Successfully created Pull Request: %s", pr.html_url)
+                METRICS['github_api_calls_total'].labels(operation="create_pull_request", status="success").inc()
                 return pr.html_url
 
             except GithubException as e:
@@ -1281,6 +1342,7 @@ Please review the changes and test in a development environment before merging.
                         logging.error(
                             "Please ensure the GitHub token has 'repo' permissions and try again later"
                         )
+                        METRICS['github_api_calls_total'].labels(operation="create_pull_request", status="failed").inc()
                         return None
                 else:
                     # Re-raise other GitHub exceptions
@@ -1312,8 +1374,10 @@ Please review the changes and test in a development environment before merging.
             logging.error("1. The GitHub token has 'repo' permissions")
             logging.error("2. The repository URL is correct")
             logging.error("3. The branch was pushed successfully")
+            METRICS['github_api_calls_total'].labels(operation="create_pull_request", status="validation_failed").inc()
         else:
             logging.error("❌ Failed to create GitHub Pull Request: %s", str(e))
+            METRICS['github_api_calls_total'].labels(operation="create_pull_request", status="failed").inc()
         return None
     except Exception as e:
         logging.exception("❌ Unexpected error creating GitHub Pull Request")
@@ -1511,14 +1575,18 @@ def list_helm_releases(
                 logging.debug("Found %d HelmReleases using %s", len(items), version)
             else:
                 logging.debug("No HelmReleases found using %s", version)
+            METRICS['kubernetes_api_calls_total'].labels(operation="list_helmreleases", status="success").inc()
             return items, version
         except ApiException as e:
             if e.status in (404, 403):
+                METRICS['kubernetes_api_calls_total'].labels(operation="list_helmreleases", status="not_found").inc()
                 continue
             logging.exception("Failed listing HelmReleases for %s", version)
+            METRICS['kubernetes_api_calls_total'].labels(operation="list_helmreleases", status="error").inc()
             continue
         except Exception:
             logging.exception("Unexpected error listing HelmReleases for %s", version)
+            METRICS['kubernetes_api_calls_total'].labels(operation="list_helmreleases", status="error").inc()
             continue
     logging.warning(
         "HelmRelease CRD not found under known versions: %s", HELM_RELEASE_VERSIONS
@@ -1784,21 +1852,49 @@ def clear_caches() -> None:
 
 
 def check_once(coapi: client.CustomObjectsApi) -> None:
-    releases, hr_version = list_helm_releases(coapi)
-    if hr_version is None:
-        logging.error("No HelmRelease API version available; skipping iteration")
+    """Perform a single check cycle with metrics instrumentation."""
+    start_time = time.time()
+    
+    try:
+        releases, hr_version = list_helm_releases(coapi)
+        if hr_version is None:
+            logging.error("No HelmRelease API version available; skipping iteration", 
+                         extra={"error_type": "api_version", "component": "kubernetes"})
+            METRICS['errors_total'].labels(error_type="api_version", component="kubernetes").inc()
+            return
+        
+        # Update metrics
+        total_releases = len(releases)
+        METRICS['helm_releases_total'].set(total_releases)
+        
+        logging.info("Starting HelmRelease check cycle", 
+                    extra={"total_releases": total_releases, "api_version": hr_version})
+        
+    except Exception as e:
+        logging.error("Failed to list HelmReleases", extra={"error_type": "list_releases", "component": "kubernetes"})
+        METRICS['errors_total'].labels(error_type="list_releases", component="kubernetes").inc()
         return
 
     # Clone/update repository once at the beginning if REPO_URL is configured
     repo_dir = None
     if REPO_URL:
         logging.debug("Initializing repository access...")
-        repo_dir = ensure_repo_cloned_or_updated()
-        if not repo_dir:
-            logging.warning(
-                "⚠️  Repository access failed, continuing without manifest path resolution"
-            )
+        try:
+            repo_dir = ensure_repo_cloned_or_updated()
+            if not repo_dir:
+                logging.warning("Repository access failed, continuing without manifest path resolution",
+                              extra={"error_type": "repo_access", "component": "git"})
+                METRICS['errors_total'].labels(error_type="repo_access", component="git").inc()
+            else:
+                METRICS['git_operations_total'].labels(operation="clone_or_update", status="success").inc()
+        except Exception as e:
+            logging.error("Repository operation failed", extra={"error_type": "repo_operation", "component": "git"})
+            METRICS['git_operations_total'].labels(operation="clone_or_update", status="error").inc()
+            METRICS['errors_total'].labels(error_type="repo_operation", component="git").inc()
 
+    outdated_count = 0
+    up_to_date_count = 0
+    
     for hr in releases:
         hr_ns = hr["metadata"]["namespace"]
         hr_name = hr["metadata"]["name"]
@@ -1833,9 +1929,17 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
             )
             continue
 
-        index = fetch_repo_index(repo)
-        if not index:
-            logging.debug("%s/%s: unable to fetch repo index; skipping", hr_ns, hr_name)
+        try:
+            index = fetch_repo_index(repo)
+            if not index:
+                logging.debug("%s/%s: unable to fetch repo index; skipping", hr_ns, hr_name)
+                METRICS['repository_index_fetches_total'].labels(status="failed").inc()
+                continue
+            METRICS['repository_index_fetches_total'].labels(status="success").inc()
+        except Exception as e:
+            logging.error("Failed to fetch repository index", extra={"error_type": "index_fetch", "component": "repository", "namespace": hr_ns, "name": hr_name})
+            METRICS['repository_index_fetches_total'].labels(status="error").inc()
+            METRICS['errors_total'].labels(error_type="index_fetch", component="repository").inc()
             continue
 
         latest_text = latest_available_version(index, chart_name, INCLUDE_PRERELEASE)
@@ -1885,12 +1989,14 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                 )
 
         if latest_ver > current_version:
+            outdated_count += 1
             logging.info(
                 "📈 Update available: %s/%s (%s -> %s)",
                 hr_ns,
                 hr_name,
                 current_version_text,
                 latest_text,
+                extra={"namespace": hr_ns, "name": hr_name, "current_version": current_version_text, "latest_version": latest_text, "status": "outdated"}
             )
 
             # Check if we should create a PR for this update
@@ -1961,13 +2067,18 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                                         hr_ns,
                                         hr_name,
                                         pr_url,
+                                        extra={"namespace": hr_ns, "name": hr_name, "pr_url": pr_url, "status": "success"}
                                     )
+                                    METRICS['pull_requests_created_total'].labels(namespace=hr_ns, name=hr_name).inc()
+                                    METRICS['updates_processed_total'].labels(namespace=hr_ns, name=hr_name, status="success").inc()
                                 else:
                                     logging.error(
                                         "❌ Failed to create PR for %s/%s",
                                         hr_ns,
                                         hr_name,
+                                        extra={"namespace": hr_ns, "name": hr_name, "status": "failed"}
                                     )
+                                    METRICS['updates_processed_total'].labels(namespace=hr_ns, name=hr_name, status="failed").inc()
                             else:
                                 logging.error(
                                     "❌ Failed to commit and push changes for %s/%s",
@@ -1989,6 +2100,7 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                         "⚠️  GitHub client not available, skipping PR creation"
                     )
         else:
+            up_to_date_count += 1
             logging.debug(
                 "%s/%s: up-to-date (chart %s current %s, latest %s)",
                 hr_ns,
@@ -1996,12 +2108,29 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                 chart_name,
                 current_version_text,
                 latest_text,
+                extra={"namespace": hr_ns, "name": hr_name, "chart_name": chart_name, "current_version": current_version_text, "latest_version": latest_text, "status": "up_to_date"}
             )
+    
+    # Update final metrics
+    METRICS['helm_releases_outdated'].set(outdated_count)
+    METRICS['helm_releases_up_to_date'].set(up_to_date_count)
+    METRICS['last_successful_check_timestamp'].set(time.time())
+    
+    # Record check cycle duration
+    duration = time.time() - start_time
+    METRICS['check_cycle_duration_seconds'].observe(duration)
+    
+    logging.info("Check cycle completed", 
+                extra={"total_releases": total_releases, "outdated": outdated_count, "up_to_date": up_to_date_count, "duration_seconds": duration})
 
 
 def main() -> None:
     """Main application entry point with optimized configuration."""
     configure_logging()
+    
+    # Initialize metrics
+    initialize_metrics()
+    
     coapi = load_kube_config()
     interval = Config.DEFAULT_INTERVAL_SECONDS
     

@@ -54,20 +54,6 @@ logLevel: INFO
 intervalSeconds: 300
 includePrerelease: false
 
-# Health check configuration
-healthCheck:
-  port: 8080
-  livenessProbe:
-    initialDelaySeconds: 30
-    periodSeconds: 10
-    timeoutSeconds: 5
-    failureThreshold: 3
-  readinessProbe:
-    initialDelaySeconds: 5
-    periodSeconds: 5
-    timeoutSeconds: 3
-    failureThreshold: 3
-
 podAnnotations: {}
 
 # Git repository configuration to locate HelmRelease manifests in Flux repo
@@ -102,3 +88,33 @@ git:
   userName: "fluxcd-helm-upgrader"           # Git user name for commits
   userEmail: "fluxcd-helm-upgrader@noreply.local"  # Git user email for commits
   forcePush: false                          # Force push branches when they exist
+
+# Health check configuration
+healthCheck:
+  port: 8080
+  livenessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# Metrics configuration
+metrics:
+  port: 8081
+  serviceMonitor:
+    enabled: false
+    interval: "30s"
+    scrapeTimeout: "10s"
+    labels: {}
+  prometheusRule:
+    enabled: false
+    labels: {}
+
+# Logging configuration
+logging:
+  format: "text"  # Options: "text" or "json"

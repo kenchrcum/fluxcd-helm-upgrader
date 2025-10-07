@@ -1,0 +1,22 @@
+{{- if eq .Values.mode "deployment" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fluxcd-helm-upgrader.fullname" . }}
+  labels:
+    {{- include "fluxcd-helm-upgrader.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.healthCheck.port | default 8080 }}
+      targetPort: health
+      protocol: TCP
+      name: health
+    - port: {{ .Values.metrics.port | default 8081 }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    app.kubernetes.io/name: {{ include "fluxcd-helm-upgrader.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
