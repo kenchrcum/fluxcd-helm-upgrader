@@ -1,5 +1,9 @@
 # FluxCD Helm Upgrader
 
+![Version](https://img.shields.io/badge/version-0.4.2-blue.svg)
+[![License](https://img.shields.io/badge/license-Unlicense-lightgrey.svg)](LICENSE)
+[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/fluxcd-helm-upgrader)](https://artifacthub.io/packages/search?repo=fluxcd-helm-upgrader)
+
 A Kubernetes application that automatically detects and reports Helm chart updates for FluxCD `HelmRelease` objects, helping you stay current with upstream chart versions.
 
 ## Overview
