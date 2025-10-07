@@ -40,7 +40,7 @@ class Config:
     )
     REQUEST_TIMEOUT = (5, 20)  # connect, read
     DEFAULT_HEADERS = {
-        "User-Agent": "fluxcd-helm-upgrader/0.4.1 (+https://github.com/kenchrcum/fluxcd-helm-upgrader)",
+        "User-Agent": "fluxcd-helm-upgrader/0.4.2 (+https://github.com/kenchrcum/fluxcd-helm-upgrader)",
         "Accept": "application/x-yaml, text/yaml, text/plain;q=0.9, */*;q=0.8",
     }
     
@@ -187,7 +187,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             response = {
                 "status": "healthy",
                 "timestamp": time.time(),
-                "version": "0.4.1"
+                "version": "0.4.2"
             }
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -213,7 +213,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             response = {
                 "status": "ready" if k8s_ready else "not_ready",
                 "timestamp": time.time(),
-                "version": "0.4.1",
+                "version": "0.4.2",
                 "kubernetes": k8s_ready
             }
             
@@ -251,7 +251,7 @@ def initialize_metrics():
     try:
         # Set application info
         METRICS['application_info'].info({
-            'version': '0.4.1',
+            'version': '0.4.2',
             'component': 'fluxcd-helm-upgrader',
             'description': 'FluxCD Helm Release Upgrader'
         })
@@ -2000,7 +2000,7 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                 continue
             METRICS['repository_index_fetches_total'].labels(status="success").inc()
         except Exception as e:
-            logging.error("Failed to fetch repository index", extra={"error_type": "index_fetch", "component": "repository", "namespace": hr_ns, "name": hr_name})
+            logging.error("Failed to fetch repository index", extra={"error_type": "index_fetch", "component": "repository", "namespace": hr_ns, "hr_name": hr_name})
             METRICS['repository_index_fetches_total'].labels(status="error").inc()
             METRICS['errors_total'].labels(error_type="index_fetch", component="repository").inc()
             continue
@@ -2059,7 +2059,7 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                 hr_name,
                 current_version_text,
                 latest_text,
-                extra={"namespace": hr_ns, "name": hr_name, "current_version": current_version_text, "latest_version": latest_text, "status": "outdated"}
+                extra={"namespace": hr_ns, "hr_name": hr_name, "current_version": current_version_text, "latest_version": latest_text, "status": "outdated"}
             )
 
             # Check if we should create a PR for this update
@@ -2130,7 +2130,7 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                                         hr_ns,
                                         hr_name,
                                         pr_url,
-                                        extra={"namespace": hr_ns, "name": hr_name, "pr_url": pr_url, "status": "success"}
+                                        extra={"namespace": hr_ns, "hr_name": hr_name, "pr_url": pr_url, "status": "success"}
                                     )
                                     METRICS['pull_requests_created_total'].labels(namespace=hr_ns, name=hr_name).inc()
                                     METRICS['updates_processed_total'].labels(namespace=hr_ns, name=hr_name, status="success").inc()
@@ -2139,7 +2139,7 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                                         "❌ Failed to create PR for %s/%s",
                                         hr_ns,
                                         hr_name,
-                                        extra={"namespace": hr_ns, "name": hr_name, "status": "failed"}
+                                        extra={"namespace": hr_ns, "hr_name": hr_name, "status": "failed"}
                                     )
                                     METRICS['updates_processed_total'].labels(namespace=hr_ns, name=hr_name, status="failed").inc()
                             else:
@@ -2171,7 +2171,7 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                 chart_name,
                 current_version_text,
                 latest_text,
-                extra={"namespace": hr_ns, "name": hr_name, "chart_name": chart_name, "current_version": current_version_text, "latest_version": latest_text, "status": "up_to_date"}
+                extra={"namespace": hr_ns, "hr_name": hr_name, "chart_name": chart_name, "current_version": current_version_text, "latest_version": latest_text, "status": "up_to_date"}
             )
     
     # Update final metrics
@@ -2219,9 +2219,9 @@ def main() -> None:
 
     # Log configuration once at startup
     if run_mode == "once":
-        logging.info("🚀 Starting FluxCD Helm upgrader v0.4.1 (single-run mode)")
+        logging.info("🚀 Starting FluxCD Helm upgrader v0.4.2 (single-run mode)")
     else:
-        logging.info("🚀 Starting FluxCD Helm upgrader v0.4.1 (continuous mode, interval: %ss)", interval)
+        logging.info("🚀 Starting FluxCD Helm upgrader v0.4.2 (continuous mode, interval: %ss)", interval)
     
     if Config.REPO_URL:
         logging.info("📂 Repository: %s", Config.REPO_URL)

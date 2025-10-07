@@ -3,6 +3,9 @@
 # Build stage
 FROM alpine:3.22.1 AS builder
 
+# Upgrade system packages
+RUN apk upgrade --no-cache
+
 # Install Python and build dependencies
 RUN apk add --no-cache \
     python3 \
@@ -26,6 +29,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Runtime stage
 FROM alpine:3.22.1
 
+# Upgrade system packages
+RUN apk upgrade --no-cache
+
 # Install only runtime dependencies
 RUN apk add --no-cache \
     python3 \
@@ -42,6 +48,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Set Python environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
+
+# Upgrade pip
+RUN /opt/venv/bin/pip install -U pip
 
 WORKDIR /app
 
