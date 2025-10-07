@@ -897,4 +897,4 @@ This will show manifest paths for all HelmReleases, not just those with updates.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the Unlicense - see the LICENSE file for details.
