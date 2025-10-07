@@ -28,7 +28,7 @@ spec:
         severity: warning
       annotations:
         summary: "FluxCD Helm Upgrader high error rate"
-        description: "FluxCD Helm Upgrader is experiencing a high error rate: {{ $value }} errors per second."
+        description: "FluxCD Helm Upgrader is experiencing a high error rate: {{`{{ $value }}`}} errors per second."
 
     - alert: FluxCDHelmUpgraderNoSuccessfulChecks
       expr: time() - fluxcd_helm_upgrader_last_successful_check_timestamp > 600
@@ -46,7 +46,7 @@ spec:
         severity: warning
       annotations:
         summary: "FluxCD Helm Upgrader slow check cycles"
-        description: "FluxCD Helm Upgrader check cycles are taking longer than 5 minutes (95th percentile: {{ $value }}s)."
+        description: "FluxCD Helm Upgrader check cycles are taking longer than 5 minutes (95th percentile: {{`{{ $value }}`}}s)."
 
     - alert: FluxCDHelmUpgraderManyOutdatedReleases
       expr: fluxcd_helm_upgrader_helm_releases_outdated > 10
@@ -55,7 +55,7 @@ spec:
         severity: info
       annotations:
         summary: "Many HelmReleases need updates"
-        description: "There are {{ $value }} HelmReleases that need updates."
+        description: "There are {{`{{ $value }}`}} HelmReleases that need updates."
 
     - alert: FluxCDHelmUpgraderGitOperationFailures
       expr: rate(fluxcd_helm_upgrader_git_operations_total{status="failed"}[5m]) > 0.05
@@ -64,7 +64,7 @@ spec:
         severity: warning
       annotations:
         summary: "FluxCD Helm Upgrader Git operation failures"
-        description: "FluxCD Helm Upgrader is experiencing Git operation failures: {{ $value }} failures per second."
+        description: "FluxCD Helm Upgrader is experiencing Git operation failures: {{`{{ $value }}`}} failures per second."
 
     - alert: FluxCDHelmUpgraderGitHubAPIFailures
       expr: rate(fluxcd_helm_upgrader_github_api_calls_total{status="failed"}[5m]) > 0.05
@@ -73,5 +73,5 @@ spec:
         severity: warning
       annotations:
         summary: "FluxCD Helm Upgrader GitHub API failures"
-        description: "FluxCD Helm Upgrader is experiencing GitHub API failures: {{ $value }} failures per second."
+        description: "FluxCD Helm Upgrader is experiencing GitHub API failures: {{`{{ $value }}`}} failures per second."
 {{- end }}
