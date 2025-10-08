@@ -31,13 +31,13 @@ spec:
         description: "FluxCD Helm Upgrader is experiencing a high error rate: {{`{{ $value }}`}} errors per second."
 
     - alert: FluxCDHelmUpgraderNoSuccessfulChecks
-      expr: time() - fluxcd_helm_upgrader_last_successful_check_timestamp > 600
+      expr: time() - fluxcd_helm_upgrader_last_successful_check_timestamp > 43200
       for: 5m
       labels:
         severity: warning
       annotations:
         summary: "FluxCD Helm Upgrader no successful checks"
-        description: "FluxCD Helm Upgrader has not completed a successful check in the last 10 minutes."
+        description: "FluxCD Helm Upgrader has not completed a successful check in the last 12 hours."
 
     - alert: FluxCDHelmUpgraderSlowCheckCycles
       expr: histogram_quantile(0.95, rate(fluxcd_helm_upgrader_check_cycle_duration_seconds_bucket[5m])) > 300
