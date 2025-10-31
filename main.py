@@ -1123,9 +1123,9 @@ def check_branch_exists_locally(repo_dir: str, branch_name: str) -> bool:
 
 
 def check_if_pr_already_exists(
-    github_client: Github, namespace: str, name: str, branch_name: str
+    github_client: Github, namespace: str, name: str, branch_name: str, new_version: str
 ) -> Optional[str]:
-    """Check if a PR already exists for this update."""
+    """Check if a PR already exists for this update (open, closed, or merged)."""
     try:
         if not GITHUB_REPOSITORY:
             return None
@@ -1133,17 +1133,35 @@ def check_if_pr_already_exists(
         owner, repo_name = parse_github_repository(GITHUB_REPOSITORY)
         repo = github_client.get_repo(f"{owner}/{repo_name}")
 
-        # Get all open PRs
-        pulls = repo.get_pulls(state="open", head=f"{owner}:{branch_name}")
+        # Check both open and closed PRs
+        for state in ["open", "closed"]:
+            pulls = repo.get_pulls(state=state, head=f"{owner}:{branch_name}")
 
-        # Check if any PR matches our update
-        title_pattern = f"Update {name} in namespace {namespace}"
-        for pr in pulls:
-            if title_pattern in pr.title:
-                logging.info(
-                    "✅ Found existing PR for %s/%s: %s", namespace, name, pr.html_url
-                )
-                return pr.html_url
+            # Check if any PR matches our update by branch name (most specific check)
+            title_pattern = f"Update {name} in namespace {namespace}"
+            for pr in pulls:
+                if title_pattern in pr.title:
+                    state_desc = "open" if state == "open" else ("merged" if pr.merged else "closed")
+                    logging.info(
+                        "✅ Found existing %s PR for %s/%s: %s", state_desc, namespace, name, pr.html_url
+                    )
+                    return pr.html_url
+
+        # Also check for any PR with the same title pattern regardless of branch (broader check)
+        # This catches cases where PRs were created with different branch names but same title
+        for state in ["open", "closed"]:
+            pulls = repo.get_pulls(state=state)
+
+            for pr in pulls:
+                if title_pattern in pr.title:
+                    # Additional check: ensure the PR is for the same version
+                    if f"to version {new_version}" in pr.body:
+                        state_desc = "open" if state == "open" else ("merged" if pr.merged else "closed")
+                        logging.info(
+                            "✅ Found existing %s PR for %s/%s version %s: %s",
+                            state_desc, namespace, name, new_version, pr.html_url
+                        )
+                        return pr.html_url
 
         return None
     except Exception as e:
@@ -1420,7 +1438,7 @@ Please review the changes and test in a development environment before merging.
             # Try to find the existing PR URL and return it
             try:
                 existing_pr = check_if_pr_already_exists(
-                    github_client, namespace, name, branch_name
+                    github_client, namespace, name, branch_name, new_version
                 )
                 if existing_pr:
                     logging.info("🎯 Found existing PR: %s", existing_pr)
@@ -2078,7 +2096,7 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
 
                     # Check if PR already exists before doing any file operations
                     existing_pr = check_if_pr_already_exists(
-                        github_client, hr_ns, hr_name, branch_name
+                        github_client, hr_ns, hr_name, branch_name, latest_text
                     )
                     if existing_pr:
                         logging.info(
