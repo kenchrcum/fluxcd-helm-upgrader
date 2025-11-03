@@ -5,7 +5,7 @@ home: https://github.com/kenchrcum/fluxcd-helm-upgrader
 sources:
   - https://github.com/kenchrcum/fluxcd-helm-upgrader
 maintainers:
-  - name: Kenneth
+  - name: kenchrcum
     url: https://github.com/kenchrcum
 type: application
 version: 0.4.5
