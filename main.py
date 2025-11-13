@@ -40,7 +40,7 @@ class Config:
     )
     REQUEST_TIMEOUT = (5, 20)  # connect, read
     DEFAULT_HEADERS = {
-        "User-Agent": "fluxcd-helm-upgrader/0.4.5 (+https://github.com/kenchrcum/fluxcd-helm-upgrader)",
+        "User-Agent": "fluxcd-helm-upgrader/0.5.0 (+https://github.com/kenchrcum/fluxcd-helm-upgrader)",
         "Accept": "application/x-yaml, text/yaml, text/plain;q=0.9, */*;q=0.8",
     }
     
@@ -226,7 +226,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             response = {
                 "status": "healthy",
                 "timestamp": time.time(),
-                "version": "0.4.5"
+                "version": "0.5.0"
             }
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -252,7 +252,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             response = {
                 "status": "ready" if k8s_ready else "not_ready",
                 "timestamp": time.time(),
-                "version": "0.4.5",
+                "version": "0.5.0",
                 "kubernetes": k8s_ready
             }
             
@@ -290,7 +290,7 @@ def initialize_metrics():
     try:
         # Set application info
         METRICS['application_info'].info({
-            'version': '0.4.5',
+            'version': '0.5.0',
             'component': 'fluxcd-helm-upgrader',
             'description': 'FluxCD Helm Release Upgrader'
         })
@@ -2360,9 +2360,9 @@ def main() -> None:
 
     # Log configuration once at startup
     if run_mode == "once":
-        logging.info("🚀 Starting FluxCD Helm upgrader v0.4.5 (single-run mode)")
+        logging.info("🚀 Starting FluxCD Helm upgrader v0.5.0 (single-run mode)")
     else:
-        logging.info("🚀 Starting FluxCD Helm upgrader v0.4.5 (continuous mode, interval: %ss)", interval)
+        logging.info("🚀 Starting FluxCD Helm upgrader v0.5.0 (continuous mode, interval: %ss)", interval)
     
     if Config.REPO_URL:
         logging.info("📂 Repository: %s", Config.REPO_URL)
