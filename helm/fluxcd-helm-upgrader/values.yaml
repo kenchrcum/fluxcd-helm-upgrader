@@ -83,6 +83,11 @@ github:
   repository: ""               # GitHub repository in format 'owner/repo'
   defaultBranch: ""            # Override default branch detection (optional)
 
+  # PR Assignee configuration (optional)
+  defaultAssignee: ""          # Default GitHub user to assign to all PRs
+  assigneesByNamespace: ""     # JSON mapping of namespaces to GitHub users
+  assigneesByHelmRelease: ""   # JSON mapping of HelmRelease names to GitHub users
+
 # Git configuration for commits
 git:
   userName: "fluxcd-helm-upgrader"           # Git user name for commits

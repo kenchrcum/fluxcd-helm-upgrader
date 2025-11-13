@@ -84,6 +84,18 @@ spec:
                 - name: GITHUB_DEFAULT_BRANCH
                   value: {{ .Values.github.defaultBranch | quote }}
                 {{- end }}
+                {{- if .Values.github.defaultAssignee }}
+                - name: GITHUB_DEFAULT_ASSIGNEE
+                  value: {{ .Values.github.defaultAssignee | quote }}
+                {{- end }}
+                {{- if .Values.github.assigneesByNamespace }}
+                - name: GITHUB_ASSIGNEES_BY_NAMESPACE
+                  value: {{ .Values.github.assigneesByNamespace | quote }}
+                {{- end }}
+                {{- if .Values.github.assigneesByHelmRelease }}
+                - name: GITHUB_ASSIGNEES_BY_HELMRELEASE
+                  value: {{ .Values.github.assigneesByHelmRelease | quote }}
+                {{- end }}
                 {{- if .Values.git.userName }}
                 - name: GIT_USER_NAME
                   value: {{ .Values.git.userName | quote }}

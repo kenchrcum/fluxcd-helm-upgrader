@@ -201,6 +201,40 @@ env:
     value: "fluxcd-helm-upgrader"
   - name: GIT_USER_EMAIL
     value: "fluxcd-helm-upgrader@noreply.local"
+
+#### Configure PR Assignees (Optional)
+
+You can automatically assign GitHub users to created pull requests based on namespace or HelmRelease name. The assignment follows this priority order:
+
+1. **HelmRelease-specific assignment** (highest priority)
+2. **Namespace assignment**
+3. **Default assignee** (fallback)
+
+```yaml
+# Assign specific users based on namespace or HelmRelease
+github:
+  defaultAssignee: "platform-team"  # Default assignee for all PRs
+  assigneesByNamespace: '{"production": "platform-team", "staging": "devops-team"}'
+  assigneesByHelmRelease: '{"prometheus": "monitoring-team", "nginx": "platform-team"}'
+
+# Or via environment variables
+env:
+  - name: GITHUB_DEFAULT_ASSIGNEE
+    value: "platform-team"
+  - name: GITHUB_ASSIGNEES_BY_NAMESPACE
+    value: '{"production": "platform-team", "staging": "devops-team"}'
+  - name: GITHUB_ASSIGNEES_BY_HELMRELEASE
+    value: '{"prometheus": "monitoring-team", "nginx": "platform-team"}'
+```
+
+**Assignment Logic Examples:**
+
+- **HelmRelease `prometheus` in namespace `production`**: Assigns `monitoring-team` (HelmRelease-specific wins)
+- **HelmRelease `nginx` in namespace `staging`**: Assigns `platform-team` (HelmRelease-specific wins)
+- **HelmRelease `app` in namespace `production`**: Assigns `platform-team` (namespace mapping)
+- **HelmRelease `other-app` in namespace `development`**: Assigns `platform-team` (default assignee)
+
+**Pattern Matching:** You can also use partial name matching. For example, if you have `"monitoring"` as a key, it will match any HelmRelease name containing "monitoring".
 ```
 
 #### Example Helm Install with GitHub PRs
@@ -611,6 +645,9 @@ This runs the upgrader every 4 hours instead of continuously, which is more suit
 | `github.tokenSecret.key` | Key name in secret containing token | `"token"` |
 | `github.repository` | GitHub repository in format 'owner/repo' | `""` |
 | `github.defaultBranch` | Override default branch detection | `""` |
+| `github.defaultAssignee` | Default GitHub user to assign to all PRs | `""` |
+| `github.assigneesByNamespace` | JSON mapping of namespaces to GitHub users | `""` |
+| `github.assigneesByHelmRelease` | JSON mapping of HelmRelease names to GitHub users | `""` |
 | `git.userName` | Git user name for commits | `fluxcd-helm-upgrader` |
 | `git.userEmail` | Git user email for commits | `fluxcd-helm-upgrader@noreply.local` |
 | `git.forcePush` | Force push existing branches | `false` |
@@ -636,6 +673,9 @@ This runs the upgrader every 4 hours instead of continuously, which is more suit
 - `GITHUB_TOKEN`: GitHub personal access token for PR creation
 - `GITHUB_REPOSITORY`: GitHub repository in format 'owner/repo' for PR creation
 - `GITHUB_DEFAULT_BRANCH`: Override the default branch detection (optional, defaults to auto-detection)
+- `GITHUB_DEFAULT_ASSIGNEE`: Default GitHub username to assign to all created PRs
+- `GITHUB_ASSIGNEES_BY_NAMESPACE`: JSON string mapping namespaces to GitHub usernames (e.g., '{"production": "platform-team", "staging": "devops-team"}')
+- `GITHUB_ASSIGNEES_BY_HELMRELEASE`: JSON string mapping HelmRelease names to GitHub usernames (e.g., '{"prometheus": "monitoring-team", "nginx": "platform-team"}')
 - `GIT_USER_NAME`: Git user name for commits (default: fluxcd-helm-upgrader)
 - `GIT_USER_EMAIL`: Git user email for commits (default: fluxcd-helm-upgrader@noreply.local)
 - `GIT_FORCE_PUSH`: Force push branches when they already exist (default: false)

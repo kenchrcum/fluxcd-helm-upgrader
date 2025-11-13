@@ -79,6 +79,11 @@ class Config:
     GIT_FORCE_PUSH = os.getenv("GIT_FORCE_PUSH", "false").lower() in (
         "1", "true", "yes", "on"
     )
+
+    # GitHub assignee configuration
+    GITHUB_DEFAULT_ASSIGNEE = os.getenv("GITHUB_DEFAULT_ASSIGNEE", "").strip()
+    GITHUB_ASSIGNEES_BY_NAMESPACE = os.getenv("GITHUB_ASSIGNEES_BY_NAMESPACE", "").strip()
+    GITHUB_ASSIGNEES_BY_HELMRELEASE = os.getenv("GITHUB_ASSIGNEES_BY_HELMRELEASE", "").strip()
     
     @classmethod
     def get_boolean_env(cls, key: str, default: bool = False) -> bool:
@@ -134,7 +139,41 @@ class Config:
         if cls.REPO_SEARCH_PATTERN:
             if not cls.REPO_SEARCH_PATTERN.startswith('/'):
                 errors.append("REPO_SEARCH_PATTERN should start with '/'")
-        
+
+        # Validate GitHub assignee configurations
+        if cls.GITHUB_DEFAULT_ASSIGNEE and not cls.GITHUB_DEFAULT_ASSIGNEE.replace('-', '').replace('_', '').isalnum():
+            errors.append("GITHUB_DEFAULT_ASSIGNEE should contain only alphanumeric characters, hyphens, and underscores")
+
+        if cls.GITHUB_ASSIGNEES_BY_NAMESPACE:
+            try:
+                import json
+                namespace_assignees = json.loads(cls.GITHUB_ASSIGNEES_BY_NAMESPACE)
+                if not isinstance(namespace_assignees, dict):
+                    errors.append("GITHUB_ASSIGNEES_BY_NAMESPACE must be a valid JSON object mapping namespaces to GitHub usernames")
+                else:
+                    for ns, assignee in namespace_assignees.items():
+                        if not isinstance(assignee, str) or not assignee.strip():
+                            errors.append(f"Invalid assignee '{assignee}' for namespace '{ns}' in GITHUB_ASSIGNEES_BY_NAMESPACE")
+                        elif not assignee.replace('-', '').replace('_', '').isalnum():
+                            errors.append(f"Assignee '{assignee}' for namespace '{ns}' should contain only alphanumeric characters, hyphens, and underscores")
+            except json.JSONDecodeError as e:
+                errors.append(f"GITHUB_ASSIGNEES_BY_NAMESPACE must be valid JSON: {str(e)}")
+
+        if cls.GITHUB_ASSIGNEES_BY_HELMRELEASE:
+            try:
+                import json
+                helmrlease_assignees = json.loads(cls.GITHUB_ASSIGNEES_BY_HELMRELEASE)
+                if not isinstance(helmrlease_assignees, dict):
+                    errors.append("GITHUB_ASSIGNEES_BY_HELMRELEASE must be a valid JSON object mapping HelmRelease names to GitHub usernames")
+                else:
+                    for hr, assignee in helmrlease_assignees.items():
+                        if not isinstance(assignee, str) or not assignee.strip():
+                            errors.append(f"Invalid assignee '{assignee}' for HelmRelease '{hr}' in GITHUB_ASSIGNEES_BY_HELMRELEASE")
+                        elif not assignee.replace('-', '').replace('_', '').isalnum():
+                            errors.append(f"Assignee '{assignee}' for HelmRelease '{hr}' should contain only alphanumeric characters, hyphens, and underscores")
+            except json.JSONDecodeError as e:
+                errors.append(f"GITHUB_ASSIGNEES_BY_HELMRELEASE must be valid JSON: {str(e)}")
+
         # Validate clone directory
         if cls.REPO_CLONE_DIR:
             clone_path = Path(cls.REPO_CLONE_DIR)
@@ -300,6 +339,9 @@ GITHUB_TOKEN = Config.GITHUB_TOKEN
 GITHUB_REPOSITORY = Config.GITHUB_REPOSITORY
 GITHUB_DEFAULT_BRANCH = Config.GITHUB_DEFAULT_BRANCH
 GIT_FORCE_PUSH = Config.GIT_FORCE_PUSH
+GITHUB_DEFAULT_ASSIGNEE = Config.GITHUB_DEFAULT_ASSIGNEE
+GITHUB_ASSIGNEES_BY_NAMESPACE = Config.GITHUB_ASSIGNEES_BY_NAMESPACE
+GITHUB_ASSIGNEES_BY_HELMRELEASE = Config.GITHUB_ASSIGNEES_BY_HELMRELEASE
 
 
 # Helper functions for common patterns
@@ -809,6 +851,72 @@ def create_github_client() -> Optional[Github]:
     """Legacy function for backward compatibility."""
     github_manager = GitHubManager()
     return github_manager.client
+
+
+def determine_github_assignee(namespace: str, helmrelease_name: str) -> Optional[str]:
+    """Determine which GitHub user should be assigned to a PR based on namespace and HelmRelease name.
+
+    Priority order:
+    1. Specific HelmRelease mapping (highest priority)
+    2. Namespace mapping
+    3. Default assignee (fallback)
+    4. None (no assignee)
+
+    Args:
+        namespace: Kubernetes namespace
+        helmrelease_name: HelmRelease name
+
+    Returns:
+        GitHub username to assign, or None if no assignee configured
+    """
+    import json
+
+    # Check HelmRelease-specific mapping first (highest priority)
+    if GITHUB_ASSIGNEES_BY_HELMRELEASE:
+        try:
+            helmrlease_assignees = json.loads(GITHUB_ASSIGNEES_BY_HELMRELEASE)
+            # Try exact match first
+            if helmrelease_name in helmrlease_assignees:
+                assignee = helmrlease_assignees[helmrelease_name]
+                if assignee and assignee.strip():
+                    logging.debug("Assigned user '%s' for HelmRelease '%s' (exact match)", assignee, helmrelease_name)
+                    return assignee.strip()
+
+            # Try pattern matching (if helmrelease_name contains any key as substring)
+            for pattern, assignee in helmrlease_assignees.items():
+                if pattern in helmrelease_name and assignee and assignee.strip():
+                    logging.debug("Assigned user '%s' for HelmRelease '%s' (pattern match: %s)", assignee, helmrelease_name, pattern)
+                    return assignee.strip()
+        except (json.JSONDecodeError, TypeError) as e:
+            logging.warning("Failed to parse GITHUB_ASSIGNEES_BY_HELMRELEASE: %s", str(e))
+
+    # Check namespace mapping
+    if GITHUB_ASSIGNEES_BY_NAMESPACE:
+        try:
+            namespace_assignees = json.loads(GITHUB_ASSIGNEES_BY_NAMESPACE)
+            # Try exact match first
+            if namespace in namespace_assignees:
+                assignee = namespace_assignees[namespace]
+                if assignee and assignee.strip():
+                    logging.debug("Assigned user '%s' for namespace '%s' (exact match)", assignee, namespace)
+                    return assignee.strip()
+
+            # Try pattern matching (if namespace contains any key as substring)
+            for pattern, assignee in namespace_assignees.items():
+                if pattern in namespace and assignee and assignee.strip():
+                    logging.debug("Assigned user '%s' for namespace '%s' (pattern match: %s)", assignee, namespace, pattern)
+                    return assignee.strip()
+        except (json.JSONDecodeError, TypeError) as e:
+            logging.warning("Failed to parse GITHUB_ASSIGNEES_BY_NAMESPACE: %s", str(e))
+
+    # Fall back to default assignee
+    if GITHUB_DEFAULT_ASSIGNEE and GITHUB_DEFAULT_ASSIGNEE.strip():
+        logging.debug("Assigned default user '%s' for %s/%s", GITHUB_DEFAULT_ASSIGNEE, namespace, helmrelease_name)
+        return GITHUB_DEFAULT_ASSIGNEE.strip()
+
+    # No assignee configured
+    logging.debug("No assignee configured for %s/%s", namespace, helmrelease_name)
+    return None
 
 
 def load_kube_config() -> client.CustomObjectsApi:
@@ -1395,6 +1503,21 @@ Please review the changes and test in a development environment before merging.
 
                 logging.info("✅ Successfully created Pull Request: %s", pr.html_url)
                 METRICS['github_api_calls_total'].labels(operation="create_pull_request", status="success").inc()
+
+                # Assign user to the PR if configured
+                assignee = determine_github_assignee(namespace, name)
+                if assignee:
+                    try:
+                        pr.add_to_assignees(assignee)
+                        logging.info("✅ Successfully assigned user '%s' to PR: %s", assignee, pr.html_url)
+                        METRICS['github_api_calls_total'].labels(operation="assign_pr", status="success").inc()
+                    except GithubException as assign_error:
+                        logging.warning("⚠️  Failed to assign user '%s' to PR: %s", assignee, str(assign_error))
+                        METRICS['github_api_calls_total'].labels(operation="assign_pr", status="failed").inc()
+                    except Exception as assign_error:
+                        logging.warning("⚠️  Unexpected error assigning user '%s' to PR: %s", assignee, str(assign_error))
+                        METRICS['github_api_calls_total'].labels(operation="assign_pr", status="error").inc()
+
                 return pr.html_url
 
             except GithubException as e:
