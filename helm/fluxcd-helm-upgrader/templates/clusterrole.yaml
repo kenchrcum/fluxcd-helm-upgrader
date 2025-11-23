@@ -12,4 +12,7 @@ rules:
   - apiGroups: ["source.toolkit.fluxcd.io"]
     resources: ["helmcharts", "helmrepositories"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    verbs: ["get", "list", "watch"]
 {{- end }}

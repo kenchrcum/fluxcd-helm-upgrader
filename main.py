@@ -21,6 +21,7 @@ from kubernetes import client, config
 from kubernetes.client import ApiException
 from github import Github, GithubException
 from prometheus_client import Counter, Histogram, Gauge, Info, generate_latest, CONTENT_TYPE_LATEST
+from nova_integration import NovaIntegration
 
 
 class Config:
@@ -2099,9 +2100,24 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
     outdated_count = 0
     up_to_date_count = 0
     
+    # Run nova scan
+    logging.info("Running nova scan to detect outdated releases...")
+    nova_integration = NovaIntegration()
+    outdated_releases = nova_integration.get_outdated_releases()
+    
+    # Build lookup: (target_namespace, release_name) -> latest_version
+    outdated_lookup = {}
+    for r in outdated_releases:
+        key = (r.get('namespace'), r.get('release'))
+        if 'Latest' in r and 'version' in r['Latest']:
+             outdated_lookup[key] = r['Latest']['version']
+    
+    logging.info("Nova found %d outdated releases", len(outdated_lookup))
+
     for hr in releases:
         hr_ns = hr["metadata"]["namespace"]
         hr_name = hr["metadata"]["name"]
+        
         chart_name, current_version_text = get_current_chart_name_and_version(hr)
         if not chart_name:
             logging.debug("%s/%s: chart name unknown; skipping", hr_ns, hr_name)
@@ -2109,81 +2125,43 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
         if not current_version_text:
             logging.debug("%s/%s: current version unknown; skipping", hr_ns, hr_name)
             continue
-        current_version = parse_version(current_version_text)
-        if not current_version:
-            logging.debug(
-                "%s/%s: unable to parse current version '%s'",
-                hr_ns,
-                hr_name,
-                current_version_text,
-            )
-            continue
 
-        repo = resolve_repo_for_release(coapi, hr)
-        if not repo:
-            logging.debug(
-                "%s/%s: HelmRepository not resolved; skipping", hr_ns, hr_name
-            )
-            continue
+        # Determine release name and target namespace as Flux would
+        spec = hr.get("spec", {})
+        target_ns = spec.get("targetNamespace", hr_ns)
+        release_name = spec.get("releaseName", hr_name)
 
-        spec = repo.get("spec") or {}
-        if spec.get("type") == "oci":
-            logging.debug(
-                "%s/%s: OCI HelmRepository not supported yet; skipping", hr_ns, hr_name
-            )
-            continue
-
-        try:
-            index = fetch_repo_index(repo)
-            if not index:
-                logging.debug("%s/%s: unable to fetch repo index; skipping", hr_ns, hr_name)
-                METRICS['repository_index_fetches_total'].labels(status="failed").inc()
-                continue
-            METRICS['repository_index_fetches_total'].labels(status="success").inc()
-        except Exception as e:
-            logging.error("Failed to fetch repository index", extra={"error_type": "index_fetch", "component": "repository", "namespace": hr_ns, "hr_name": hr_name})
-            METRICS['repository_index_fetches_total'].labels(status="error").inc()
-            METRICS['errors_total'].labels(error_type="index_fetch", component="repository").inc()
-            continue
-
-        latest_text = latest_available_version(index, chart_name, INCLUDE_PRERELEASE)
+        latest_text = outdated_lookup.get((target_ns, release_name))
+        
         if not latest_text:
+            up_to_date_count += 1
             logging.debug(
-                "%s/%s: no versions found in repo index for chart %s",
+                "%s/%s: up-to-date (chart %s current %s)",
                 hr_ns,
                 hr_name,
                 chart_name,
+                current_version_text,
+                extra={"namespace": hr_ns, "hr_name": hr_name, "chart_name": chart_name, "current_version": current_version_text, "status": "up_to_date"}
             )
             continue
-        latest_ver = parse_version(latest_text)
-        if not latest_ver:
-            logging.debug(
-                "%s/%s: unable to parse repo version '%s'", hr_ns, hr_name, latest_text
-            )
+            
+        if current_version_text == latest_text:
+            logging.debug("%s/%s: CRD already at %s (installed version outdated)", hr_ns, hr_name, latest_text)
+            up_to_date_count += 1
             continue
 
-        # Try to locate the HelmRelease manifest path if repository is available
+        manifest_rel_path = None
         if repo_dir:
             manifest_rel_path = resolve_manifest_path_for_release(
                 repo_dir, hr_ns, hr_name
             )
             if manifest_rel_path:
-                if latest_ver > current_version:
-                    # Show manifest path for releases with updates available
-                    logging.info(
-                        "📄 %s/%s -> %s",
-                        hr_ns,
-                        hr_name,
-                        manifest_rel_path,
-                    )
-                else:
-                    # Debug level for releases that are up-to-date
-                    logging.debug(
-                        "📄 %s/%s -> %s (up-to-date)",
-                        hr_ns,
-                        hr_name,
-                        manifest_rel_path,
-                    )
+                 logging.info(
+                    "📄 %s/%s -> %s",
+                    hr_ns,
+                    hr_name,
+                    manifest_rel_path,
+                )
             else:
                 logging.debug(
                     "No manifest found for %s/%s (pattern: %s)",
@@ -2192,128 +2170,108 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                     REPO_SEARCH_PATTERN,
                 )
 
-        if latest_ver > current_version:
-            outdated_count += 1
+        outdated_count += 1
+        logging.info(
+            "📈 Update available: %s/%s (%s -> %s)",
+            hr_ns,
+            hr_name,
+            current_version_text,
+            latest_text,
+            extra={"namespace": hr_ns, "hr_name": hr_name, "current_version": current_version_text, "latest_version": latest_text, "status": "outdated"}
+        )
+
+        if GITHUB_TOKEN and repo_dir and manifest_rel_path:
             logging.info(
-                "📈 Update available: %s/%s (%s -> %s)",
-                hr_ns,
-                hr_name,
-                current_version_text,
-                latest_text,
-                extra={"namespace": hr_ns, "hr_name": hr_name, "current_version": current_version_text, "latest_version": latest_text, "status": "outdated"}
+                "🔄 Processing GitHub PR creation for %s/%s", hr_ns, hr_name
             )
 
-            # Check if we should create a PR for this update
-            if GITHUB_TOKEN and repo_dir and manifest_rel_path:
-                logging.info(
-                    "🔄 Processing GitHub PR creation for %s/%s", hr_ns, hr_name
+            github_client = create_github_client()
+            if github_client:
+                branch_name = f"update-{hr_ns}-{hr_name}-{latest_text}".replace(
+                    ".", "-"
                 )
 
-                # Create GitHub client
-                github_client = create_github_client()
-                if github_client:
-                    # Generate branch name to check for existing PR
-                    branch_name = f"update-{hr_ns}-{hr_name}-{latest_text}".replace(
-                        ".", "-"
+                existing_pr = check_if_pr_already_exists(
+                    github_client, hr_ns, hr_name, branch_name, latest_text
+                )
+                if existing_pr:
+                    logging.info(
+                        "🎯 PR already exists for %s/%s: %s",
+                        hr_ns,
+                        hr_name,
+                        existing_pr,
                     )
+                    logging.info(
+                        "✅ Skipping file operations since PR is already created"
+                    )
+                    continue  # Skip to next HelmRelease
 
-                    # Check if PR already exists before doing any file operations
-                    existing_pr = check_if_pr_already_exists(
-                        github_client, hr_ns, hr_name, branch_name, latest_text
-                    )
-                    if existing_pr:
-                        logging.info(
-                            "🎯 PR already exists for %s/%s: %s",
+                branch_name = create_update_branch(
+                    repo_dir, hr_ns, hr_name, latest_text
+                )
+                if branch_name:
+                    if update_helm_release_manifest(
+                        repo_dir,
+                        manifest_rel_path,
+                        latest_text,
+                        current_version_text,
+                    ):
+                        if commit_and_push_changes(
+                            repo_dir,
+                            branch_name,
                             hr_ns,
                             hr_name,
-                            existing_pr,
-                        )
-                        logging.info(
-                            "✅ Skipping file operations since PR is already created"
-                        )
-                        continue  # Skip to next HelmRelease
-
-                    # Create update branch
-                    branch_name = create_update_branch(
-                        repo_dir, hr_ns, hr_name, latest_text
-                    )
-                    if branch_name:
-                        # Update manifest
-                        if update_helm_release_manifest(
-                            repo_dir,
-                            manifest_rel_path,
-                            latest_text,
                             current_version_text,
+                            latest_text,
+                            github_client,
                         ):
-                            # Commit and push changes (this will handle the case where no changes are needed)
-                            if commit_and_push_changes(
-                                repo_dir,
-                                branch_name,
+                            pr_url = create_github_pull_request(
+                                github_client,
                                 hr_ns,
                                 hr_name,
                                 current_version_text,
                                 latest_text,
-                                github_client,
-                            ):
-                                # Create PR
-                                pr_url = create_github_pull_request(
-                                    github_client,
+                                branch_name,
+                                manifest_rel_path,
+                            )
+                            if pr_url:
+                                logging.info(
+                                    "🎉 Successfully created PR for %s/%s: %s",
                                     hr_ns,
                                     hr_name,
-                                    current_version_text,
-                                    latest_text,
-                                    branch_name,
-                                    manifest_rel_path,
+                                    pr_url,
+                                    extra={"namespace": hr_ns, "hr_name": hr_name, "pr_url": pr_url, "status": "success"}
                                 )
-                                if pr_url:
-                                    logging.info(
-                                        "🎉 Successfully created PR for %s/%s: %s",
-                                        hr_ns,
-                                        hr_name,
-                                        pr_url,
-                                        extra={"namespace": hr_ns, "hr_name": hr_name, "pr_url": pr_url, "status": "success"}
-                                    )
-                                    METRICS['pull_requests_created_total'].labels(namespace=hr_ns, name=hr_name).inc()
-                                    METRICS['updates_processed_total'].labels(namespace=hr_ns, name=hr_name, status="success").inc()
-                                else:
-                                    logging.error(
-                                        "❌ Failed to create PR for %s/%s",
-                                        hr_ns,
-                                        hr_name,
-                                        extra={"namespace": hr_ns, "hr_name": hr_name, "status": "failed"}
-                                    )
-                                    METRICS['updates_processed_total'].labels(namespace=hr_ns, name=hr_name, status="failed").inc()
+                                METRICS['pull_requests_created_total'].labels(namespace=hr_ns, name=hr_name).inc()
+                                METRICS['updates_processed_total'].labels(namespace=hr_ns, name=hr_name, status="success").inc()
                             else:
                                 logging.error(
-                                    "❌ Failed to commit and push changes for %s/%s",
+                                    "❌ Failed to create PR for %s/%s",
                                     hr_ns,
                                     hr_name,
+                                    extra={"namespace": hr_ns, "hr_name": hr_name, "status": "failed"}
                                 )
+                                METRICS['updates_processed_total'].labels(namespace=hr_ns, name=hr_name, status="failed").inc()
                         else:
                             logging.error(
-                                "❌ Failed to update manifest for %s/%s", hr_ns, hr_name
+                                "❌ Failed to commit and push changes for %s/%s",
+                                hr_ns,
+                                hr_name,
                             )
                     else:
                         logging.error(
-                            "❌ Failed to create update branch for %s/%s",
-                            hr_ns,
-                            hr_name,
+                            "❌ Failed to update manifest for %s/%s", hr_ns, hr_name
                         )
                 else:
-                    logging.warning(
-                        "⚠️  GitHub client not available, skipping PR creation"
+                    logging.error(
+                        "❌ Failed to create update branch for %s/%s",
+                        hr_ns,
+                        hr_name,
                     )
-        else:
-            up_to_date_count += 1
-            logging.debug(
-                "%s/%s: up-to-date (chart %s current %s, latest %s)",
-                hr_ns,
-                hr_name,
-                chart_name,
-                current_version_text,
-                latest_text,
-                extra={"namespace": hr_ns, "hr_name": hr_name, "chart_name": chart_name, "current_version": current_version_text, "latest_version": latest_text, "status": "up_to_date"}
-            )
+            else:
+                logging.warning(
+                    "⚠️  GitHub client not available, skipping PR creation"
+                )
     
     # Update final metrics
     METRICS['helm_releases_outdated'].set(outdated_count)

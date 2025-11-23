@@ -14,6 +14,9 @@ rules:
   - apiGroups: ["source.toolkit.fluxcd.io"]
     resources: ["helmcharts", "helmrepositories"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

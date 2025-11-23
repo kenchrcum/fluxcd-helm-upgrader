@@ -18,6 +18,10 @@ RUN apk add --no-cache \
     ca-certificates \
     curl
 
+# Install nova
+ARG NOVA_VERSION=3.11.9
+RUN curl -L "https://github.com/FairwindsOps/nova/releases/download/v${NOVA_VERSION}/nova_${NOVA_VERSION}_linux_amd64.tar.gz" | tar -xz -C /usr/local/bin nova
+
 # Create virtual environment
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
@@ -39,11 +43,15 @@ RUN apk add --no-cache \
     curl \
     git \
     openssh-client \
+    libc6-compat \
     && rm -rf /var/cache/apk/*
 
 # Copy virtual environment from builder stage
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy nova binary
+COPY --from=builder /usr/local/bin/nova /usr/local/bin/nova
 
 # Set Python environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -55,7 +63,7 @@ RUN /opt/venv/bin/pip install -U pip
 WORKDIR /app
 
 # Copy application code
-COPY main.py ./
+COPY main.py nova_integration.py ./
 
 # Create non-root user and set permissions
 RUN addgroup -g 10001 -S appuser && \
