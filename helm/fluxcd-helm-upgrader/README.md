@@ -4,8 +4,11 @@ This Helm chart deploys the FluxCD Helm Upgrader application, which automaticall
 
 ## Features
 
+- **Nova Integration**: Uses Fairwinds Nova for comprehensive Helm chart scanning across all namespaces
+- **OCI Registry Support**: Full support for OCI-based Helm charts with chartRef structure
 - **Automated Monitoring**: Periodically scans all HelmRelease objects for newer chart versions
-- **GitHub Integration**: Automatically creates Pull Requests when updates are detected
+- **GitHub Integration**: Automatically creates Pull Requests with OCI information and appVersion details
+- **AppVersion Inspection**: Downloads Helm charts to extract appVersion for stability assessment
 - **Multiple Deployment Modes**:
   - **Deployment Mode**: Continuous monitoring with configurable intervals
   - **CronJob Mode**: Scheduled execution for resource-constrained environments
@@ -160,7 +163,8 @@ rbac:
 The chart creates a dedicated service account with minimal required permissions:
 
 - `helmreleases` (get, list, watch) in `helm.toolkit.fluxcd.io` API group
-- `helmcharts` and `helmrepositories` (get, list, watch) in `source.toolkit.fluxcd.io` API group
+- `helmcharts`, `helmrepositories`, and `ocirepositories` (get, list, watch) in `source.toolkit.fluxcd.io` API group
+- `secrets` and `configmaps` (get, list, watch) in core API group (required by Nova)
 
 ### Security Context
 
@@ -185,11 +189,48 @@ kubectl logs -l job-name=fluxcd-helm-upgrader
 
 ### Metrics
 
-Currently, the application does not expose Prometheus metrics. This is planned for a future release.
+The application exposes comprehensive Prometheus metrics at the `/metrics` endpoint:
+
+- `fluxcd_helm_upgrader_info`: Application version and build information
+- `fluxcd_helm_upgrader_check_cycles_total`: Total number of check cycles performed
+- `fluxcd_helm_upgrader_updates_processed_total`: Updates processed by namespace and status
+- `fluxcd_helm_upgrader_pull_requests_created_total`: Pull requests created by namespace
+- `fluxcd_helm_upgrader_check_cycle_duration_seconds`: Duration of check cycles
+
+### ServiceMonitor
+
+A ServiceMonitor resource is included for automatic Prometheus discovery:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: fluxcd-helm-upgrader
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fluxcd-helm-upgrader
+  endpoints:
+  - port: metrics
+    path: /metrics
+```
 
 ## Troubleshooting
 
 ### Common Issues
+
+#### Nova Integration Issues
+
+1. **RBAC Permissions**: Ensure Nova has access to secrets and configmaps:
+   ```yaml
+   rbac:
+     clusterWide: true  # Required for Nova
+   ```
+
+2. **OCI Repository Access**: For OCI-based releases, ensure OCIRepository permissions:
+   - RBAC includes `ocirepositories` in `source.toolkit.fluxcd.io` API group
+
+3. **AppVersion Inspection**: If appVersion extraction fails, verify Helm CLI and registry access
 
 #### SSH Authentication Failures
 

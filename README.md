@@ -8,9 +8,74 @@ A Kubernetes application that automatically detects and reports Helm chart updat
 
 ## Overview
 
-This project provides automated monitoring of Helm chart versions used in your FluxCD-managed Kubernetes clusters. The upgrader periodically scans all `HelmRelease` objects, resolves their associated `HelmChart` and `HelmRepository` resources, and checks for newer versions of the charts in their upstream repositories.
+This project provides automated monitoring of Helm chart versions used in your FluxCD-managed Kubernetes clusters. The upgrader uses [Nova](https://github.com/FairwindsOps/nova) to scan all running Helm releases and identify outdated charts, supporting both traditional Helm repositories and modern OCI registries.
+
+**Key Features:**
+- **Nova Integration**: Leverages Fairwinds Nova for comprehensive Helm chart scanning
+- **OCI Registry Support**: Full support for OCI-based Helm charts (chartRef structure)
+- **GitHub Integration**: Automatically creates Pull Requests when updates are detected
+- **Dual Manifest Update**: Updates both traditional HelmRelease manifests and OCIRepository specs
+- **AppVersion Inspection**: Downloads and inspects Helm charts to extract appVersion for stability assessment
 
 When updates are available, it provides clear logging with the exact manifest file paths that need to be modified, making it easy to keep your deployments up-to-date.
+
+## Nova Integration
+
+The upgrader integrates with [Fairwinds Nova](https://github.com/FairwindsOps/nova), a powerful CLI tool for finding outdated Helm charts. Nova provides comprehensive scanning capabilities and supports both traditional Helm repositories and modern OCI registries.
+
+### Nova Features Used:
+- **Comprehensive Scanning**: Scans all Helm releases across all namespaces in your cluster
+- **OCI Registry Support**: Detects updates for charts stored in OCI registries (like GHCR, Docker Hub, etc.)
+- **Version Comparison**: Accurately identifies newer versions including pre-releases
+- **JSON Output**: Provides structured data for programmatic processing
+
+### Configuration
+
+Nova runs automatically with these default options:
+```bash
+nova find --format json --containers=false
+```
+
+You can customize Nova behavior using the `NOVA_ARGS` environment variable:
+
+```yaml
+env:
+  - name: NOVA_ARGS
+    value: "--containers=true --helm-version=v3"
+```
+
+### OCI HelmRelease Support
+
+The upgrader provides full support for OCI-based HelmReleases using FluxCD's `chartRef` structure:
+
+```yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: my-chart
+    namespace: flux-system
+```
+
+**Features:**
+- **Automatic Detection**: Identifies OCI-based releases automatically
+- **Manifest Updates**: Updates OCIRepository `spec.ref.tag` fields instead of HelmRelease `spec.version`
+- **AppVersion Inspection**: Downloads Helm charts to extract `appVersion` from Chart.yaml for stability assessment
+- **PR Enhancement**: Includes OCI registry information and appVersion in PR descriptions
+
+### AppVersion Stability Assessment
+
+For OCI releases, the upgrader can inspect the actual Helm chart to extract the `appVersion` field, which helps assess whether an update represents a stable release or just a chart packaging change.
+
+**Example PR with OCI Information:**
+```markdown
+### OCI Chart Information
+- **OCI Registry:** oci://ghcr.io/berriai/litellm-helm
+- **App Version:** 1.2.3
+
+⚠️ **Important:** Please verify this app version meets your stability requirements before merging.
+```
 
 ### GitHub Integration
 
@@ -25,10 +90,13 @@ This feature enables automated, reviewable updates to your FluxCD manifests.
 
 ## Architecture
 
-- **Upgrader Application**: Python application that monitors Kubernetes HelmRelease objects
-- **Docker Container**: Optimized Alpine-based container with SSH support
-- **Kubernetes Deployment**: Includes RBAC, health checks, and security best practices
-- **Helm Chart**: Easy deployment and configuration management
+- **Nova Integration**: Uses Fairwinds Nova CLI for comprehensive Helm chart scanning across all namespaces
+- **OCI Support**: Handles both traditional HelmRepository sources and modern OCIRepository (OCI) sources
+- **Upgrader Application**: Python application that processes Nova results and manages Kubernetes HelmRelease objects
+- **Docker Container**: Optimized Alpine-based container with Helm CLI, SSH, and Nova support
+- **Kubernetes Deployment**: Includes RBAC for HelmRelease, OCIRepository, and related resources
+- **Dual Manifest Updates**: Updates HelmRelease manifests and OCIRepository specs as needed
+- **GitHub Integration**: Creates PRs with detailed OCI information including appVersion metadata
 
 ## Quick Start
 
@@ -756,9 +824,41 @@ kubectl get pods -l app.kubernetes.io/name=fluxcd-helm-upgrader
 
 1. **SSH Key Permissions**: Ensure SSH keys have correct permissions (600 for private key)
 2. **Repository Access**: Verify SSH key has read access to the repository
-3. **RBAC Permissions**: Ensure the service account can read HelmRelease and related resources
+3. **RBAC Permissions**: Ensure the service account can read HelmRelease, OCIRepository, and related resources
 4. **Image Pull**: Verify the Docker image is accessible from your cluster
 5. **Repository URL**: Ensure the repository URL is accessible and correct
+
+### Nova Integration Issues
+
+1. **Nova RBAC Permissions**: Ensure the service account has permissions to list secrets and configmaps (required by Nova):
+   ```yaml
+   - apiGroups: [""]
+     resources: ["secrets", "configmaps"]
+     verbs: ["get", "list", "watch"]
+   ```
+
+2. **Nova Command Failures**: Check Nova logs for specific errors:
+   ```bash
+   # Test Nova directly in the cluster
+   kubectl exec -it deployment/fluxcd-helm-upgrader -- nova find --format json
+   ```
+
+3. **OCI Registry Access**: For OCI-based releases, ensure the cluster can pull from OCI registries
+
+### OCI HelmRelease Issues
+
+1. **OCIRepository Permissions**: Ensure RBAC includes OCIRepository access:
+   ```yaml
+   - apiGroups: ["source.toolkit.fluxcd.io"]
+     resources: ["ocirepositories"]
+     verbs: ["get", "list", "watch"]
+   ```
+
+2. **Manifest Path Resolution**: For OCI releases, ensure OCIRepository manifests are in expected locations:
+   - `clusters/*/helmrepositories/helmrepository-{name}.yaml`
+   - `helmrepositories/helmrepository-{name}.yaml`
+
+3. **AppVersion Inspection**: If appVersion extraction fails, check Helm CLI installation and registry access
 
 ### GitHub Integration Issues
 

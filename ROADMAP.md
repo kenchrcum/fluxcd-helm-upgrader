@@ -23,7 +23,16 @@ This roadmap outlines the planned improvements and enhancements for the FluxCD H
 
 ## 🟡 High Priority (Should Fix)
 
-### 4. RBAC Security Enhancement ✅ **COMPLETED**
+### 4. Nova Integration ✅ **COMPLETED**
+- **Issue**: Manual Helm repository scanning was limited and complex
+- **Impact**: Incomplete chart detection, missing OCI support, manual version checking
+- **Solution**: ✅ **IMPLEMENTED** - Full Nova CLI integration:
+  - Leverages Fairwinds Nova for comprehensive Helm chart scanning
+  - Supports both traditional and OCI-based Helm releases
+  - JSON output processing for automated updates
+  - Simplified architecture with external scanning tool
+
+### 5. RBAC Security Enhancement ✅ **COMPLETED**
 - **Issue**: Cluster-wide RBAC when namespace-scoped might suffice for most use cases
 - **Impact**: Over-privileged access, security risk in multi-tenant clusters
 - **Solution**: ✅ **ALREADY IMPLEMENTED** - Option for namespace-scoped RBAC with `rbac.clusterWide: false`
@@ -63,13 +72,15 @@ This roadmap outlines the planned improvements and enhancements for the FluxCD H
   - ✅ Alerting rules for failures and performance issues
   - ✅ ServiceMonitor and PrometheusRule templates for easy integration
 
-### 9. OCI Registry Support ❌ **DENIED**
+### 9. OCI Registry Support ✅ **COMPLETED**
 - **Issue**: OCI HelmRepository type detected but not supported
 - **Impact**: Limited compatibility with modern Helm repositories
-- **Solution**: **DECISION** - Traditional Helm repositories are sufficient for current use cases:
-  - Traditional Helm repositories work well with FluxCD
-  - No immediate need for OCI registry complexity
-  - Focus on core functionality instead of OCI support
+- **Solution**: ✅ **IMPLEMENTED** - Full OCI registry support with chartRef structure:
+  - Automatic detection of OCI-based HelmReleases
+  - OCIRepository manifest updates instead of HelmRelease updates
+  - AppVersion inspection for stability assessment
+  - Enhanced PR descriptions with OCI information
+  - Comprehensive RBAC for OCIRepository access
 
 ### 10. Configuration Validation ✅ **COMPLETED**
 - **Issue**: Limited validation of configuration values
