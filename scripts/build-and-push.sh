@@ -20,7 +20,7 @@ echo "Build complete!"
 echo ""
 echo "To push the image to Docker Hub:"
 docker push ${IMAGE_NAME}:${VERSION}
-if [ "$VERSION" != "latest" ]; then
+if [ "$VERSION" != "latest" && "$VERSION" == "dev" ]; then
     docker push ${IMAGE_NAME}:latest
 fi
 
