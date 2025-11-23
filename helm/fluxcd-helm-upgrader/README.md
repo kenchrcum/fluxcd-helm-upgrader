@@ -45,7 +45,7 @@ The following table lists the configurable parameters of the FluxCD Helm Upgrade
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `image.repository` | Docker image repository | `kenchrcum/fluxcd-helm-upgrader` |
-| `image.tag` | Docker image tag | `0.5.0` |
+| `image.tag` | Docker image tag | `0.6.0` |
 | `image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `mode` | Deployment mode: `deployment` or `cronjob` | `deployment` |
 | `replicaCount` | Number of replicas (deployment mode only) | `1` |
