@@ -1208,6 +1208,133 @@ def update_helm_release_manifest(
         return False
 
 
+def update_oci_repository_manifest(
+    repo_dir: str, oci_repo_name: str, oci_repo_namespace: str, new_version: str, current_version: str
+) -> bool:
+    """Update the OCIRepository manifest with the new version, preserving original formatting."""
+    try:
+        # Find the OCIRepository manifest file
+        # Look in common locations for FluxCD manifests
+        possible_paths = [
+            # Common FluxCD patterns
+            f"clusters/*/helmrepositories/{oci_repo_namespace}/{oci_repo_name}.yaml",
+            f"clusters/*/helmrepositories/helmrepository-{oci_repo_name}.yaml",
+            f"clusters/*/helmrepositories/{oci_repo_name}.yaml",
+            f"helmrepositories/{oci_repo_namespace}/{oci_repo_name}.yaml",
+            f"helmrepositories/helmrepository-{oci_repo_name}.yaml",
+            f"helmrepositories/{oci_repo_name}.yaml",
+            # Generic searches
+            f"**/{oci_repo_name}.yaml",
+            f"**/helmrepository-{oci_repo_name}.yaml",
+            f"**/*{oci_repo_name}*.yaml",
+        ]
+
+        logging.info("Searching for OCIRepository manifest %s/%s in repo: %s", oci_repo_namespace, oci_repo_name, repo_dir)
+
+        manifest_path = None
+        for path_pattern in possible_paths:
+            try:
+                logging.debug("Trying pattern: %s", path_pattern)
+                matches = list(Path(repo_dir).glob(path_pattern))
+                if matches:
+                    manifest_path = matches[0].relative_to(repo_dir)
+                    logging.info("✅ Found OCIRepository manifest: %s", manifest_path)
+                    break
+            except Exception as e:
+                logging.debug("Error with pattern %s: %s", path_pattern, e)
+                continue
+
+        if not manifest_path:
+            # Fallback: search for YAML files containing the OCIRepository by content
+            logging.info("🔍 Fallback search: looking for YAML files containing OCIRepository %s/%s", oci_repo_namespace, oci_repo_name)
+            try:
+                for yaml_file in Path(repo_dir).rglob("*.yaml"):
+                    try:
+                        with open(yaml_file, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                            if f'kind: OCIRepository' in content and f'name: {oci_repo_name}' in content:
+                                # Check if namespace matches (if specified in the file)
+                                if f'namespace: {oci_repo_namespace}' in content or oci_repo_namespace in str(yaml_file):
+                                    manifest_path = yaml_file.relative_to(repo_dir)
+                                    logging.info("✅ Found OCIRepository manifest by content search: %s", manifest_path)
+                                    break
+                    except Exception:
+                        continue
+            except Exception as e:
+                logging.debug("Content search failed: %s", e)
+
+        if not manifest_path:
+            logging.error("❌ Could not find OCIRepository manifest for %s/%s. Searched patterns: %s",
+                         oci_repo_namespace, oci_repo_name, possible_paths)
+            return False
+
+        full_path = Path(repo_dir) / manifest_path
+        logging.info("Updating OCIRepository manifest: %s", full_path)
+
+        # Read the manifest file as text to preserve formatting
+        with open(full_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # Check if the file already contains the target version
+        import re
+
+        target_tag_patterns = [
+            r"(^\s*tag:\s*)" + re.escape(str(new_version)) + r"(\s*$)",
+            r'(^\s*tag:\s*["\'])' + re.escape(str(new_version)) + r'(["\']\s*$)',
+        ]
+
+        for pattern in target_tag_patterns:
+            if re.search(pattern, content, re.MULTILINE):
+                logging.info(
+                    "✅ OCIRepository already contains target tag %s, no update needed",
+                    new_version,
+                )
+                return True
+
+        # Update the tag field under spec.ref
+        # Look for patterns like:
+        # spec:
+        #   ref:
+        #     tag: old_version
+        tag_patterns = [
+            r"(^\s*tag:\s*)" + re.escape(str(current_version)) + r"(\s*$)",
+            r'(^\s*tag:\s*["\'])' + re.escape(str(current_version)) + r'(["\']\s*$)',
+        ]
+
+        updated = False
+        for pattern in tag_patterns:
+            if re.search(pattern, content, re.MULTILINE):
+                def replacement(match):
+                    return match.group(1) + str(new_version) + match.group(2)
+
+                content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
+                updated = True
+                logging.info(
+                    "Updated OCIRepository tag from %s to %s",
+                    current_version,
+                    new_version,
+                )
+                break
+
+        if not updated:
+            logging.warning(
+                "No tag field found to update in OCIRepository (searched for: %s)",
+                current_version,
+            )
+            return False
+
+        # Write back the content preserving original formatting
+        with open(full_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        logging.info("✅ Successfully updated OCIRepository with tag %s", new_version)
+        return True
+
+    except Exception as e:
+        logging.exception("Error updating OCIRepository manifest")
+        return False
+
+
 def check_branch_exists_on_remote(repo_dir: str, branch_name: str) -> bool:
     """Check if a branch exists on the remote repository."""
     try:
@@ -1855,9 +1982,27 @@ def get_helm_repository(
     return repo, version
 
 
+def get_oci_repository(
+    coapi: client.CustomObjectsApi, namespace: str, name: str
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    repo, version = get_namespaced_obj(
+        coapi, SOURCE_GROUP, SOURCE_VERSIONS, namespace, "ocirepositories", name
+    )
+    return repo, version
+
+
 def resolve_repo_for_release(
     coapi: client.CustomObjectsApi, hr: Dict[str, Any]
 ) -> Optional[Dict[str, Any]]:
+    spec = hr.get("spec") or {}
+
+    # Check for chartRef first (OCI repositories)
+    chart_ref = spec.get("chartRef")
+    if chart_ref and chart_ref.get("kind") == "OCIRepository":
+        # For OCI repositories, we can't fetch index like Helm repos, so return None
+        # Nova handles OCI scanning differently
+        return None
+
     # Prefer resolving through HelmChart, then fallback to HR.spec.chart.spec.sourceRef
     chart, _ = get_helm_chart_for_release(coapi, hr)
     if chart:
@@ -1870,6 +2015,10 @@ def resolve_repo_for_release(
             )
             if repo:
                 return repo
+        elif src_ref.get("kind") == "OCIRepository":
+            # For OCI repositories, we can't fetch index like Helm repos, so return None
+            # Nova handles OCI scanning differently
+            return None
     chart_spec = (hr.get("spec") or {}).get("chart") or {}
     inner_spec = chart_spec.get("spec") or {}
     src_ref = inner_spec.get("sourceRef") or {}
@@ -1881,22 +2030,185 @@ def resolve_repo_for_release(
         )
         if repo:
             return repo
+    elif src_ref.get("kind") == "OCIRepository":
+        # For OCI repositories, we can't fetch index like Helm repos, so return None
+        # Nova handles OCI scanning differently
+        return None
     return None
 
 
 def get_current_chart_name_and_version(
-    hr: Dict[str, Any],
+    coapi: client.CustomObjectsApi, hr: Dict[str, Any],
 ) -> Tuple[Optional[str], Optional[str]]:
+    # Extract namespace and name for logging
+    hr_ns = hr.get("metadata", {}).get("namespace", "unknown")
+    hr_name = hr.get("metadata", {}).get("name", "unknown")
+
     spec = hr.get("spec") or {}
+
+    # Check for chartRef first (used for OCI repositories)
+    chart_ref = spec.get("chartRef")
+    logging.debug("%s/%s: checking chartRef: %s", hr_ns, hr_name, chart_ref)
+    if chart_ref and chart_ref.get("kind") == "OCIRepository":
+        # For OCI repositories with chartRef, extract chart name from OCIRepository
+        try:
+            oci_namespace = chart_ref.get("namespace") or hr["metadata"]["namespace"]
+            oci_name = chart_ref.get("name")
+
+            logging.debug("%s/%s: looking up OCIRepository %s/%s", hr_ns, hr_name, oci_namespace, oci_name)
+
+            oci_repo, _ = get_oci_repository(coapi, oci_namespace, oci_name)
+            if oci_repo:
+                oci_spec = oci_repo.get("spec") or {}
+                url = oci_spec.get("url", "")
+
+                logging.debug("%s/%s: found OCIRepository with URL: %s", hr_ns, hr_name, url)
+
+                if url.startswith("oci://"):
+                    # Extract chart name from OCI URL like oci://ghcr.io/berriai/litellm-helm
+                    path_parts = url.replace("oci://", "").split("/")
+                    if len(path_parts) >= 2:
+                        chart_name = path_parts[-1]
+                        logging.debug("%s/%s: extracted chart name '%s' from OCI URL", hr_ns, hr_name, chart_name)
+                    else:
+                        chart_name = oci_name  # Fallback to OCIRepository name
+                        logging.debug("%s/%s: using OCIRepository name '%s' as chart name", hr_ns, hr_name, chart_name)
+                else:
+                    chart_name = oci_name  # Fallback to OCIRepository name
+                    logging.debug("%s/%s: URL doesn't start with oci://, using OCIRepository name '%s' as chart name", hr_ns, hr_name, chart_name)
+
+                # Get version from OCIRepository spec.ref.tag or spec.ref.semver
+                oci_ref = oci_spec.get("ref") or {}
+                desired_version = oci_ref.get("tag") or oci_ref.get("semver")
+                logging.debug("%s/%s: desired version from OCIRepository: %s", hr_ns, hr_name, desired_version)
+            else:
+                logging.debug("%s/%s: OCIRepository %s/%s not found", hr_ns, hr_name, oci_namespace, oci_name)
+                chart_name = oci_name  # Fallback to OCIRepository name
+                desired_version = None
+        except Exception as e:
+            logging.debug("Failed to resolve OCI repository for chartRef: %s", e)
+            chart_name = chart_ref.get("name")  # Fallback to OCIRepository name
+            desired_version = None
+
+        # For chartRef, we need to get the current version from status
+        status = hr.get("status") or {}
+        applied = status.get("lastAppliedRevision") or status.get("lastAttemptedRevision")
+
+        current_version: Optional[str]
+        if applied:
+            # Nova shows OCI versions with commit hashes like "0.1.805+94c7b2e9075a"
+            # We need to extract just the version part
+            if "+" in applied:
+                # Split on "+" and take the first part (version)
+                version_part = applied.split("+")[0]
+                if parse_version(version_part):
+                    current_version = version_part
+                    logging.debug("%s/%s: extracted version '%s' from applied revision '%s'", hr_ns, hr_name, current_version, applied)
+                else:
+                    current_version = None
+            elif parse_version(applied):
+                current_version = applied
+            else:
+                # Try regex for OCI-style versions
+                m = re.search(r"(\d+\.\d+\.\d+(?:-[0-9A-Za-z\.-]+)?)", applied)
+                if m:
+                    candidate = m.group(1)
+                    current_version = candidate if parse_version(candidate) else None
+                    logging.debug("%s/%s: extracted version '%s' from applied revision '%s' using regex", hr_ns, hr_name, current_version, applied)
+                else:
+                    current_version = None
+        else:
+            current_version = desired_version  # Fallback to desired version
+
+        logging.debug("%s/%s: final chart_name='%s', current_version='%s'", hr_ns, hr_name, chart_name, current_version)
+        return chart_name, current_version
+
+    # Handle traditional chart spec
     chart_node = spec.get("chart") or {}
-    chart_spec = chart_node.get("spec") or {}
-    chart_name = chart_spec.get("chart") or chart_node.get("chart")
+
+    # Handle case where chart_node itself is a string (direct chart reference)
+    if isinstance(chart_node, str):
+        chart_name = chart_node
+        chart_spec = {}
+    else:
+        chart_spec = chart_node.get("spec") or {}
+        chart_name = chart_spec.get("chart") or chart_node.get("chart")
+
+    # Handle repositoryRef case - chart name might be in a different location
+    if not chart_name and "repositoryRef" in chart_node:
+        # For repositoryRef, the chart name is usually the same as the HelmRelease name
+        # or we might need to look it up from the HelmRepository
+        hr_name_for_chart = hr.get("metadata", {}).get("name", "")
+        # Remove common suffixes like version numbers
+        chart_name = re.sub(r'-\d+.*$', '', hr_name_for_chart)
+
+    # Handle OCIRepository case - try to extract chart name from OCI URL
+    if not chart_name:
+        # Check in chart_spec first
+        source_ref = chart_spec.get("sourceRef") or {}
+        if not source_ref:
+            # Check at spec level directly (alternative structure)
+            source_ref = spec.get("sourceRef") or {}
+
+        if source_ref.get("kind") == "OCIRepository":
+            logging.debug("%s/%s: found OCIRepository sourceRef: %s", hr_ns, hr_name, source_ref)
+            # For OCI repositories, we need to look up the OCIRepository
+            # and extract the chart name from its URL
+            try:
+                oci_repo, _ = get_oci_repository(
+                    coapi,
+                    source_ref.get("namespace") or hr["metadata"]["namespace"],
+                    source_ref.get("name")
+                )
+                if oci_repo:
+                    logging.debug("%s/%s: found OCI repo: %s", hr_ns, hr_name, oci_repo.get("spec"))
+                    oci_spec = oci_repo.get("spec") or {}
+                    url = oci_spec.get("url", "")
+                    if url.startswith("oci://"):
+                        # Extract chart name from OCI URL like oci://ghcr.io/berriai/litellm-helm
+                        path_parts = url.replace("oci://", "").split("/")
+                        if len(path_parts) >= 2:
+                            # Last part is usually the chart name
+                            chart_name = path_parts[-1]
+                            logging.debug("%s/%s: extracted chart name from OCI URL: '%s'", hr_ns, hr_name, chart_name)
+                else:
+                    logging.debug("%s/%s: OCI repository not found: %s/%s", hr_ns, hr_name, source_ref.get("namespace"), source_ref.get("name"))
+            except Exception as e:
+                logging.debug("Failed to resolve OCI repository for chart name: %s", e)
+
+    # Fallback: if still no chart name, use the HelmRelease name (common for OCI)
+    if not chart_name:
+        chart_name = hr.get("metadata", {}).get("name", "")
+        logging.debug("%s/%s: using HelmRelease name as chart name: '%s'", hr_ns, hr_name, chart_name)
+
+    # Debug logging for chart structure
+    logging.debug("%s/%s chartRef: %s, chart_node: %s, chart_spec: %s, extracted chart_name: '%s'",
+                 hr_ns, hr_name, spec.get("chartRef"), chart_node, chart_spec, chart_name or "None")
 
     # Prefer the actual applied revision from status if available
     status = hr.get("status") or {}
     applied = status.get("lastAppliedRevision") or status.get("lastAttemptedRevision")
 
     desired_version = chart_spec.get("version") or None
+
+    # For OCI repositories, try to get version from the OCIRepository
+    if not desired_version:
+        source_ref = chart_spec.get("sourceRef") or {}
+        if source_ref.get("kind") == "OCIRepository":
+            try:
+                oci_repo, _ = get_oci_repository(
+                    coapi,
+                    source_ref.get("namespace") or hr["metadata"]["namespace"],
+                    source_ref.get("name")
+                )
+                if oci_repo:
+                    oci_spec = oci_repo.get("spec") or {}
+                    ref = oci_spec.get("ref") or {}
+                    tag = ref.get("tag") or ref.get("semver")
+                    if tag:
+                        desired_version = tag
+            except Exception as e:
+                logging.debug("Failed to resolve OCI repository for version: %s", e)
 
     # Applied revision is typically the version; sometimes includes chart name (e.g. mychart-1.2.3 or mychart-1.2.3-rc.1)
     current_version: Optional[str]
@@ -2110,20 +2422,22 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
     for r in outdated_releases:
         key = (r.get('namespace'), r.get('release'))
         if 'Latest' in r and 'version' in r['Latest']:
+             if key in outdated_lookup:
+                 logging.warning("Duplicate nova key %s/%s: replacing %s with %s", key[0], key[1], outdated_lookup[key], r['Latest']['version'])
              outdated_lookup[key] = r['Latest']['version']
-    
-    logging.info("Nova found %d outdated releases", len(outdated_lookup))
+             logging.debug("Nova outdated release: %s/%s chart='%s' -> %s", r.get('namespace'), r.get('release'), r.get('chartName'), r['Latest']['version'])
 
     for hr in releases:
         hr_ns = hr["metadata"]["namespace"]
         hr_name = hr["metadata"]["name"]
         
-        chart_name, current_version_text = get_current_chart_name_and_version(hr)
+        chart_name, current_version_text = get_current_chart_name_and_version(coapi, hr)
+        logging.debug("%s/%s: extracted chart_name='%s', current_version='%s'", hr_ns, hr_name, chart_name, current_version_text)
         if not chart_name:
-            logging.debug("%s/%s: chart name unknown; skipping", hr_ns, hr_name)
+            logging.info("%s/%s: chart name unknown; skipping", hr_ns, hr_name)
             continue
         if not current_version_text:
-            logging.debug("%s/%s: current version unknown; skipping", hr_ns, hr_name)
+            logging.info("%s/%s: current version unknown; skipping", hr_ns, hr_name)
             continue
 
         # Determine release name and target namespace as Flux would
@@ -2131,7 +2445,17 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
         target_ns = spec.get("targetNamespace", hr_ns)
         release_name = spec.get("releaseName", hr_name)
 
-        latest_text = outdated_lookup.get((target_ns, release_name))
+        if target_ns != hr_ns or release_name != hr_name:
+            logging.info("%s/%s maps to release %s/%s", hr_ns, hr_name, target_ns, release_name)
+        else:
+            logging.debug("%s/%s maps to release %s/%s", hr_ns, hr_name, target_ns, release_name)
+
+        lookup_key = (target_ns, release_name)
+        latest_text = outdated_lookup.get(lookup_key)
+        if latest_text:
+            logging.debug("Found match for %s/%s (lookup key: %s -> %s)", hr_ns, hr_name, lookup_key, latest_text)
+        else:
+            logging.debug("No match for %s/%s (lookup key: %s)", hr_ns, hr_name, lookup_key)
         
         if not latest_text:
             up_to_date_count += 1
@@ -2146,7 +2470,7 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
             continue
             
         if current_version_text == latest_text:
-            logging.debug("%s/%s: CRD already at %s (installed version outdated)", hr_ns, hr_name, latest_text)
+            logging.info("%s/%s: CRD already at %s (installed version may be outdated) - skipping", hr_ns, hr_name, latest_text)
             up_to_date_count += 1
             continue
 
@@ -2163,8 +2487,8 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                     manifest_rel_path,
                 )
             else:
-                logging.debug(
-                    "No manifest found for %s/%s (pattern: %s)",
+                logging.info(
+                    "No manifest found for %s/%s (pattern: %s) - skipping PR creation",
                     hr_ns,
                     hr_name,
                     REPO_SEARCH_PATTERN,
@@ -2210,12 +2534,31 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                     repo_dir, hr_ns, hr_name, latest_text
                 )
                 if branch_name:
-                    if update_helm_release_manifest(
-                        repo_dir,
-                        manifest_rel_path,
-                        latest_text,
-                        current_version_text,
-                    ):
+                    # Check if this is an OCI chartRef release
+                    chart_ref = hr.get("spec", {}).get("chartRef")
+                    if chart_ref and chart_ref.get("kind") == "OCIRepository":
+                        # For OCI chartRef releases, update the OCIRepository manifest
+                        oci_repo_name = chart_ref.get("name")
+                        oci_repo_namespace = chart_ref.get("namespace") or hr_ns
+                        logging.info("🔄 Updating OCI chartRef release %s/%s -> OCIRepository %s/%s: %s -> %s",
+                                   hr_ns, hr_name, oci_repo_namespace, oci_repo_name, current_version_text, latest_text)
+                        success = update_oci_repository_manifest(
+                            repo_dir,
+                            oci_repo_name,
+                            oci_repo_namespace,
+                            latest_text,
+                            current_version_text,
+                        )
+                    else:
+                        # For traditional HelmRelease, update the HelmRelease manifest
+                        success = update_helm_release_manifest(
+                            repo_dir,
+                            manifest_rel_path,
+                            latest_text,
+                            current_version_text,
+                        )
+
+                    if success:
                         if commit_and_push_changes(
                             repo_dir,
                             branch_name,
@@ -2273,17 +2616,45 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                     "⚠️  GitHub client not available, skipping PR creation"
                 )
     
+    # Check which nova releases were not processed and which FluxCD CRDs were not matched
+    processed_keys = set()
+    fluxcd_releases = []
+    for hr in releases:
+        spec = hr.get("spec", {})
+        target_ns = spec.get("targetNamespace", hr["metadata"]["namespace"])
+        release_name = spec.get("releaseName", hr["metadata"]["name"])
+        processed_keys.add((target_ns, release_name))
+        fluxcd_releases.append((hr["metadata"]["namespace"], hr["metadata"]["name"], target_ns, release_name))
+
+    unprocessed_nova = []
+    for key in outdated_lookup.keys():
+        if key not in processed_keys:
+            unprocessed_nova.append(key)
+
+    unmatched_fluxcd = []
+    for hr_ns, hr_name, target_ns, release_name in fluxcd_releases:
+        if (target_ns, release_name) not in outdated_lookup:
+            unmatched_fluxcd.append((hr_ns, hr_name, target_ns, release_name))
+
+    if unprocessed_nova:
+        logging.info("Nova releases not matched to any FluxCD HelmRelease: %s",
+                    [f"{ns}/{name}" for ns, name in unprocessed_nova])
+
+    if unmatched_fluxcd:
+        logging.info("FluxCD HelmReleases not found in nova scan: %s",
+                    [f"{hr_ns}/{hr_name} -> {target_ns}/{release_name}" for hr_ns, hr_name, target_ns, release_name in unmatched_fluxcd])
+
     # Update final metrics
     METRICS['helm_releases_outdated'].set(outdated_count)
     METRICS['helm_releases_up_to_date'].set(up_to_date_count)
     METRICS['last_successful_check_timestamp'].set(time.time())
-    
+
     # Record check cycle duration
     duration = time.time() - start_time
     METRICS['check_cycle_duration_seconds'].observe(duration)
-    
-    logging.info("Check cycle completed", 
-                extra={"total_releases": total_releases, "outdated": outdated_count, "up_to_date": up_to_date_count, "duration_seconds": duration})
+
+    logging.info("Check cycle completed",
+                extra={"total_releases": total_releases, "outdated": outdated_count, "up_to_date": up_to_date_count, "nova_outdated": len(outdated_lookup), "duration_seconds": duration})
 
 
 def main() -> None:

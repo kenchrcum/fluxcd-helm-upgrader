@@ -70,7 +70,7 @@ class TestVersionParsing:
             }
         }
         
-        chart_name, version = get_current_chart_name_and_version(hr)
+        chart_name, version = get_current_chart_name_and_version(None, hr)
         assert chart_name == "nginx"
         assert version == "1.0.0"
 
@@ -88,7 +88,7 @@ class TestVersionParsing:
             "status": {}
         }
         
-        chart_name, version = get_current_chart_name_and_version(hr)
+        chart_name, version = get_current_chart_name_and_version(None, hr)
         assert chart_name == "redis"
         assert version == "2.1.0"
 
@@ -108,7 +108,7 @@ class TestVersionParsing:
             }
         }
         
-        chart_name, version = get_current_chart_name_and_version(hr)
+        chart_name, version = get_current_chart_name_and_version(None, hr)
         assert chart_name == "postgresql"
         assert version == "1.2.3-alpha.1+456"
 
@@ -127,7 +127,7 @@ class TestVersionParsing:
             }
         }
         
-        chart_name, version = get_current_chart_name_and_version(hr)
+        chart_name, version = get_current_chart_name_and_version(None, hr)
         assert chart_name == "myapp"
         assert version == "3.0.0"
 
@@ -147,7 +147,7 @@ class TestVersionParsing:
             }
         }
         
-        chart_name, version = get_current_chart_name_and_version(hr)
+        chart_name, version = get_current_chart_name_and_version(None, hr)
         assert chart_name == "nginx"
         assert version is None  # Invalid revision format results in None
 
@@ -155,6 +155,6 @@ class TestVersionParsing:
         """Test handling empty HelmRelease."""
         hr = {}
         
-        chart_name, version = get_current_chart_name_and_version(hr)
+        chart_name, version = get_current_chart_name_and_version(None, hr)
         assert chart_name is None
         assert version is None

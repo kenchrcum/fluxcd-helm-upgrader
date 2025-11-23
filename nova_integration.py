@@ -61,7 +61,13 @@ class NovaIntegration:
         for release in releases:
             # Check if outdated or deprecated (user might want to know about deprecated too)
             # The user's sample output shows "outdated": true/false.
-            if release.get("outdated"):
+            if release.get("outdated") or release.get("deprecated"):
                 outdated.append(release)
+                logging.debug("Nova found outdated: %s/%s chart='%s' (outdated=%s, deprecated=%s, current=%s, latest=%s)",
+                            release.get('namespace'), release.get('release'),
+                            release.get('chartName'),
+                            release.get('outdated'), release.get('deprecated'),
+                            release.get('Installed', {}).get('version'),
+                            release.get('Latest', {}).get('version'))
         return outdated
 
