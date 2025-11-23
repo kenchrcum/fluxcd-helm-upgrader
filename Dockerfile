@@ -44,6 +44,8 @@ RUN apk add --no-cache \
     git \
     openssh-client \
     libc6-compat \
+    helm \
+    tar \
     && rm -rf /var/cache/apk/*
 
 # Copy virtual environment from builder stage

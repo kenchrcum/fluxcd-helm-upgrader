@@ -5,6 +5,8 @@ import subprocess
 import shutil
 import glob
 import threading
+import tempfile
+import tarfile
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse, quote
 from typing import Any, Dict, List, Optional, Tuple
@@ -1335,6 +1337,146 @@ def update_oci_repository_manifest(
         return False
 
 
+def update_existing_pr_with_oci_info(
+    github_client: Github, pr_url: str, oci_info: Dict[str, Any]
+) -> bool:
+    """
+    Update an existing PR with OCI information if it's missing.
+
+    Args:
+        github_client: GitHub client
+        pr_url: URL of the existing PR
+        oci_info: Dictionary with OCI information (oci_url, app_version)
+
+    Returns:
+        True if PR was updated, False otherwise
+    """
+    try:
+        if not GITHUB_REPOSITORY or not oci_info:
+            return False
+
+        owner, repo_name = parse_github_repository(GITHUB_REPOSITORY)
+        repo = github_client.get_repo(f"{owner}/{repo_name}")
+
+        # Extract PR number from URL
+        pr_number = int(pr_url.split('/')[-1])
+        pr = repo.get_pull(pr_number)
+
+        current_body = pr.body or ""
+
+        # Check if OCI information is already present
+        has_oci_section = "### OCI Chart Information" in current_body
+        has_app_version = oci_info.get('app_version') and f"**App Version:** {oci_info['app_version']}" in current_body
+
+        if has_oci_section and (not oci_info.get('app_version') or has_app_version):
+            logging.debug("PR %s already contains OCI information, skipping update", pr_url)
+            return False
+
+        # Build OCI information section
+        oci_section = "\n### OCI Chart Information\n"
+        if oci_info.get('oci_url'):
+            oci_section += f"- **OCI Registry:** {oci_info['oci_url']}\n"
+        if oci_info.get('app_version'):
+            oci_section += f"- **App Version:** {oci_info['app_version']}\n"
+            oci_section += "\n⚠️ **Important:** Please verify this app version meets your stability requirements before merging.\n"
+
+        # Find where to insert OCI section (after the Changes section)
+        if "### Changes" in current_body:
+            # Insert after Changes section
+            changes_end = current_body.find("\n### What this PR does")
+            if changes_end == -1:
+                changes_end = current_body.find("\n### Testing")
+            if changes_end == -1:
+                changes_end = len(current_body)
+
+            new_body = current_body[:changes_end] + oci_section + current_body[changes_end:]
+        else:
+            # Append to end if no Changes section found
+            new_body = current_body + oci_section
+
+        # Update the PR
+        pr.edit(body=new_body)
+        logging.info("✅ Updated existing PR %s with OCI information", pr_url)
+        return True
+
+    except Exception as e:
+        logging.exception("Failed to update existing PR %s with OCI info", pr_url)
+        return False
+
+
+def inspect_helm_chart_appversion(oci_url: str, version: str) -> Optional[str]:
+    """
+    Download and inspect a Helm chart to extract the appVersion from Chart.yaml.
+
+    Args:
+        oci_url: The OCI registry URL (e.g., "oci://ghcr.io/berriai/litellm-helm")
+        version: The chart version to inspect
+
+    Returns:
+        The appVersion string if found, None otherwise
+    """
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = Path(temp_dir)
+
+            # Pull the Helm chart
+            chart_ref = f"{oci_url}:{version}"
+            logging.debug("Pulling Helm chart: %s", chart_ref)
+
+            pull_cmd = ["helm", "pull", chart_ref, "--destination", str(temp_dir_path)]
+            result = subprocess.run(
+                pull_cmd,
+                capture_output=True,
+                text=True,
+                timeout=60  # 60 second timeout
+            )
+
+            if result.returncode != 0:
+                logging.warning("Failed to pull Helm chart %s: %s", chart_ref, result.stderr)
+                return None
+
+            # Find the downloaded .tgz file
+            tgz_files = list(temp_dir_path.glob("*.tgz"))
+            if not tgz_files:
+                logging.warning("No .tgz file found after pulling %s", chart_ref)
+                return None
+
+            chart_tgz = tgz_files[0]
+            logging.debug("Downloaded chart: %s", chart_tgz)
+
+            # Extract the Chart.yaml from the tarball
+            with tarfile.open(chart_tgz, 'r:gz') as tar:
+                # Look for Chart.yaml in the root of the tarball
+                chart_yaml_member = None
+                for member in tar.getmembers():
+                    if member.name.endswith('/Chart.yaml') or member.name == 'Chart.yaml':
+                        chart_yaml_member = member
+                        break
+
+                if not chart_yaml_member:
+                    logging.warning("Chart.yaml not found in %s", chart_tgz)
+                    return None
+
+                # Extract Chart.yaml content
+                chart_yaml_content = tar.extractfile(chart_yaml_member)
+                if chart_yaml_content:
+                    chart_data = yaml.safe_load(chart_yaml_content)
+                    app_version = chart_data.get('appVersion')
+                    if app_version:
+                        logging.info("✅ Found appVersion '%s' in chart %s:%s", app_version, oci_url, version)
+                        return str(app_version)
+
+                logging.warning("appVersion not found in Chart.yaml of %s", chart_ref)
+                return None
+
+    except subprocess.TimeoutExpired:
+        logging.warning("Timeout pulling Helm chart %s:%s", oci_url, version)
+        return None
+    except Exception as e:
+        logging.exception("Error inspecting Helm chart %s:%s", oci_url, version)
+        return None
+
+
 def check_branch_exists_on_remote(repo_dir: str, branch_name: str) -> bool:
     """Check if a branch exists on the remote repository."""
     try:
@@ -1519,6 +1661,7 @@ def create_github_pull_request(
     new_version: str,
     branch_name: str,
     manifest_path: str,
+    oci_info: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Create a GitHub Pull Request for the HelmRelease update."""
     if not GITHUB_REPOSITORY:
@@ -1601,6 +1744,19 @@ def create_github_pull_request(
         title = f"Update {name} in namespace {namespace} to version {new_version}"
 
         # Create PR body with detailed information
+        # Build OCI information section if available
+        oci_section = ""
+        if oci_info:
+            oci_url = oci_info.get('oci_url')
+            app_version = oci_info.get('app_version')
+            if oci_url or app_version:
+                oci_section = "\n### OCI Chart Information\n"
+                if oci_url:
+                    oci_section += f"- **OCI Registry:** {oci_url}\n"
+                if app_version:
+                    oci_section += f"- **App Version:** {app_version}\n"
+                    oci_section += "\n⚠️ **Important:** Please verify this app version meets your stability requirements before merging.\n"
+
         body = f"""## Helm Chart Update
 
 **Application:** {name}
@@ -1610,7 +1766,7 @@ def create_github_pull_request(
 
 ### Changes
 - Updated HelmRelease manifest: `{manifest_path}`
-- Version updated from `{current_version}` to `{new_version}`
+- Version updated from `{current_version}` to `{new_version}`{oci_section}
 
 ### What this PR does
 This pull request updates the HelmRelease for {name} in namespace {namespace} to the latest available version {new_version}.
@@ -2048,7 +2204,7 @@ def get_current_chart_name_and_version(
 
     # Check for chartRef first (used for OCI repositories)
     chart_ref = spec.get("chartRef")
-    logging.debug("%s/%s: checking chartRef: %s", hr_ns, hr_name, chart_ref)
+    logging.info("%s/%s: checking chartRef: %s", hr_ns, hr_name, chart_ref)
     if chart_ref and chart_ref.get("kind") == "OCIRepository":
         # For OCI repositories with chartRef, extract chart name from OCIRepository
         try:
@@ -2511,6 +2667,33 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
 
             github_client = create_github_client()
             if github_client:
+                # Check if this is an OCI chartRef release and collect OCI information
+                chart_ref = hr.get("spec", {}).get("chartRef")
+                logging.info("%s/%s: checking for OCI chartRef - chart_ref: %s", hr_ns, hr_name, chart_ref)
+                oci_info = None
+                if chart_ref and chart_ref.get("kind") == "OCIRepository":
+                    try:
+                        oci_repo_name = chart_ref.get("name")
+                        oci_repo_namespace = chart_ref.get("namespace") or hr_ns
+
+                        # Get OCI URL from the OCIRepository we looked up earlier
+                        oci_repo, _ = get_oci_repository(coapi, oci_repo_namespace, oci_repo_name)
+                        if oci_repo:
+                            oci_spec = oci_repo.get("spec") or {}
+                            oci_url = oci_spec.get("url", "")
+
+                            # Try to get appVersion from the new chart version
+                            app_version = inspect_helm_chart_appversion(oci_url, latest_text)
+
+                            if oci_url or app_version:
+                                oci_info = {
+                                    'oci_url': oci_url,
+                                    'app_version': app_version
+                                }
+                                logging.info("📋 Collected OCI info for PR: %s", oci_info)
+                    except Exception as e:
+                        logging.warning("Failed to collect OCI info for PR: %s", e)
+
                 branch_name = f"update-{hr_ns}-{hr_name}-{latest_text}".replace(
                     ".", "-"
                 )
@@ -2525,6 +2708,14 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                         hr_name,
                         existing_pr,
                     )
+
+                    # Check if we need to update the existing PR with OCI information
+                    if oci_info:
+                        if update_existing_pr_with_oci_info(github_client, existing_pr, oci_info):
+                            logging.info("📝 Updated existing PR with new OCI information")
+                        else:
+                            logging.debug("PR already has OCI information or update failed")
+
                     logging.info(
                         "✅ Skipping file operations since PR is already created"
                     )
@@ -2534,8 +2725,7 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                     repo_dir, hr_ns, hr_name, latest_text
                 )
                 if branch_name:
-                    # Check if this is an OCI chartRef release
-                    chart_ref = hr.get("spec", {}).get("chartRef")
+
                     if chart_ref and chart_ref.get("kind") == "OCIRepository":
                         # For OCI chartRef releases, update the OCIRepository manifest
                         oci_repo_name = chart_ref.get("name")
@@ -2576,6 +2766,7 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                                 latest_text,
                                 branch_name,
                                 manifest_rel_path,
+                                oci_info,
                             )
                             if pr_url:
                                 logging.info(
