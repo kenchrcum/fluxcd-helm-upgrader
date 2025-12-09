@@ -1,12 +1,17 @@
 apiVersion: v2
 name: fluxcd-helm-upgrader
 description: Periodically checks FluxCD HelmReleases and logs if newer chart versions are available. Supports both continuous operation (Deployment) and scheduled execution (CronJob).
+type: application
+version: 0.6.2
+appVersion: "0.6.2"
+keywords:
+  - fluxcd
+  - helm
+  - kubernetes
 home: https://github.com/kenchrcum/fluxcd-helm-upgrader
 sources:
   - https://github.com/kenchrcum/fluxcd-helm-upgrader
 maintainers:
   - name: kenchrcum
     url: https://github.com/kenchrcum
-type: application
-version: 0.6.1
-appVersion: "0.6.1"
+dependencies: []
