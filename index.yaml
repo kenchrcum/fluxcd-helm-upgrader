@@ -2,6 +2,28 @@ apiVersion: v1
 entries:
   fluxcd-helm-upgrader:
   - apiVersion: v2
+    appVersion: 0.6.2
+    created: "2025-12-09T15:16:51.620883391Z"
+    description: Periodically checks FluxCD HelmReleases and logs if newer chart versions
+      are available. Supports both continuous operation (Deployment) and scheduled
+      execution (CronJob).
+    digest: e9cb4a50a4d2d3a09c14bd52a492c925dc8559d223a426cede13e688dca39f86
+    home: https://github.com/kenchrcum/fluxcd-helm-upgrader
+    keywords:
+    - fluxcd
+    - helm
+    - kubernetes
+    maintainers:
+    - name: kenchrcum
+      url: https://github.com/kenchrcum
+    name: fluxcd-helm-upgrader
+    sources:
+    - https://github.com/kenchrcum/fluxcd-helm-upgrader
+    type: application
+    urls:
+    - https://github.com/kenchrcum/fluxcd-helm-upgrader/releases/download/fluxcd-helm-upgrader-0.6.2/fluxcd-helm-upgrader-0.6.2.tgz
+    version: 0.6.2
+  - apiVersion: v2
     appVersion: 0.6.1
     created: "2025-11-23T11:34:23.091787888Z"
     description: Periodically checks FluxCD HelmReleases and logs if newer chart versions
@@ -302,4 +324,4 @@ entries:
     urls:
     - https://github.com/kenchrcum/fluxcd-helm-upgrader/releases/download/fluxcd-helm-upgrader-0.1.1/fluxcd-helm-upgrader-0.1.1.tgz
     version: 0.1.1
-generated: "2025-11-23T11:34:23.091955572Z"
+generated: "2025-12-09T15:16:51.621046054Z"
