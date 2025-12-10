@@ -23,14 +23,16 @@ This roadmap outlines the planned improvements and enhancements for the FluxCD H
 
 ## 🟡 High Priority (Should Fix)
 
-### 4. Nova Integration ✅ **COMPLETED**
+### 4. Nova Integration with Fallback ✅ **COMPLETED**
 - **Issue**: Manual Helm repository scanning was limited and complex
 - **Impact**: Incomplete chart detection, missing OCI support, manual version checking
-- **Solution**: ✅ **IMPLEMENTED** - Full Nova CLI integration:
-  - Leverages Fairwinds Nova for comprehensive Helm chart scanning
+- **Solution**: ✅ **IMPLEMENTED** - Full Nova CLI integration with fallback mechanism:
+  - Leverages Fairwinds Nova for comprehensive Helm chart scanning (primary method)
+  - **NEW**: Fallback to classic repository scanning when Nova doesn't find releases
   - Supports both traditional and OCI-based Helm releases
   - JSON output processing for automated updates
   - Simplified architecture with external scanning tool
+  - Ensures no Helm releases are missed due to ArtifactHub limitations
 
 ### 5. RBAC Security Enhancement ✅ **COMPLETED**
 - **Issue**: Cluster-wide RBAC when namespace-scoped might suffice for most use cases
@@ -148,7 +150,7 @@ This roadmap outlines the planned improvements and enhancements for the FluxCD H
 4. ❌ Set up GitHub Actions CI/CD pipeline
 
 ### Phase 4: Feature Enhancements (Week 7-8)
-1. ❌ Implement OCI registry support
+1. ✅ Implement OCI registry support
 2. Add performance optimizations with caching
 3. Enhance Git operations with advanced features
 4. Add multi-repository support
@@ -184,4 +186,4 @@ This roadmap is a living document. Contributions are welcome for any phase. Plea
 
 ---
 
-*Last updated: October 2025*
+*Last updated: December 2025*
