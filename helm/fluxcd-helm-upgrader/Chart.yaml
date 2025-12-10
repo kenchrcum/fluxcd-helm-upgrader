@@ -2,8 +2,8 @@ apiVersion: v2
 name: fluxcd-helm-upgrader
 description: Periodically checks FluxCD HelmReleases and logs if newer chart versions are available. Supports both continuous operation (Deployment) and scheduled execution (CronJob).
 type: application
-version: 0.6.2
-appVersion: "0.6.2"
+version: 0.6.3
+appVersion: "0.6.3"
 keywords:
   - fluxcd
   - helm
