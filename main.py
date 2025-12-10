@@ -2611,19 +2611,54 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
         if latest_text:
             logging.debug("Found match for %s/%s (lookup key: %s -> %s)", hr_ns, hr_name, lookup_key, latest_text)
         else:
-            logging.debug("No match for %s/%s (lookup key: %s)", hr_ns, hr_name, lookup_key)
-        
+            logging.debug("No match for %s/%s (lookup key: %s) - trying fallback method", hr_ns, hr_name, lookup_key)
+
+        # Fallback: if Nova didn't find this release, use the classic method
         if not latest_text:
-            up_to_date_count += 1
-            logging.debug(
-                "%s/%s: up-to-date (chart %s current %s)",
-                hr_ns,
-                hr_name,
-                chart_name,
-                current_version_text,
-                extra={"namespace": hr_ns, "hr_name": hr_name, "chart_name": chart_name, "current_version": current_version_text, "status": "up_to_date"}
-            )
-            continue
+            logging.debug("%s/%s: Nova not found, using fallback method", hr_ns, hr_name)
+
+            # Try to resolve the repository and check for updates using the classic method
+            repo = resolve_repo_for_release(coapi, hr)
+            if not repo:
+                logging.debug(
+                    "%s/%s: HelmRepository not resolved; skipping", hr_ns, hr_name
+                )
+                up_to_date_count += 1
+                continue
+
+            spec = repo.get("spec") or {}
+            if spec.get("type") == "oci":
+                logging.debug(
+                    "%s/%s: OCI HelmRepository not supported in fallback method; skipping", hr_ns, hr_name
+                )
+                up_to_date_count += 1
+                continue
+
+            try:
+                index = fetch_repo_index(repo)
+                if not index:
+                    logging.debug("%s/%s: unable to fetch repo index; skipping", hr_ns, hr_name)
+                    METRICS['repository_index_fetches_total'].labels(status="failed").inc()
+                    up_to_date_count += 1
+                    continue
+                METRICS['repository_index_fetches_total'].labels(status="success").inc()
+            except Exception as e:
+                logging.error("Failed to fetch repository index", extra={"error_type": "index_fetch", "component": "repository", "namespace": hr_ns, "hr_name": hr_name})
+                METRICS['repository_index_fetches_total'].labels(status="error").inc()
+                METRICS['errors_total'].labels(error_type="index_fetch", component="repository").inc()
+                up_to_date_count += 1
+                continue
+
+            latest_text = latest_available_version(index, chart_name, INCLUDE_PRERELEASE)
+            if not latest_text:
+                logging.debug(
+                    "%s/%s: no versions found in repo index for chart %s; assuming up-to-date",
+                    hr_ns,
+                    hr_name,
+                    chart_name,
+                )
+                up_to_date_count += 1
+                continue
             
         if current_version_text == latest_text:
             logging.info("%s/%s: CRD already at %s (installed version may be outdated) - skipping", hr_ns, hr_name, latest_text)
