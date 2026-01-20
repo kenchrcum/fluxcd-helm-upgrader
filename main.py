@@ -1151,50 +1151,81 @@ def update_helm_release_manifest(
         # Check if the file already contains the target version
         import re
 
-        target_version_patterns = [
-            r"(^\s*version:\s*)" + re.escape(str(new_version)) + r"(\s*$)",
-            r'(^\s*version:\s*["\'])' + re.escape(str(new_version)) + r'(["\']\s*$)',
-        ]
+        # We need to check if the target version is present, potentially with or without 'v'
+        # This prevents redundant updates if we run multiple times
+        target_versions = [str(new_version)]
+        if str(new_version).startswith("v"):
+            target_versions.append(str(new_version)[1:])
+        else:
+            target_versions.append("v" + str(new_version))
 
-        for pattern in target_version_patterns:
-            if re.search(pattern, content, re.MULTILINE):
-                logging.info(
-                    "✅ Manifest already contains target version %s, no update needed",
-                    new_version,
-                )
-                return True
+        for t_ver in target_versions:
+            target_version_patterns = [
+                r"(^\s*version:\s*)" + re.escape(t_ver) + r"(\s*$)",
+                r'(^\s*version:\s*["\'])' + re.escape(t_ver) + r'(["\']\s*$)',
+            ]
+            for pattern in target_version_patterns:
+                if re.search(pattern, content, re.MULTILINE):
+                    logging.info(
+                        "✅ Manifest already contains target version %s (matched %s), no update needed",
+                        new_version,
+                        t_ver
+                    )
+                    return True
 
-        # Use regex to find and replace the version field while preserving formatting
-        # Pattern to match version field in chart spec, accounting for various indentation
-        patterns = [
-            # Standard format: version: old_version
-            r"(^\s*version:\s*)" + re.escape(str(current_version)) + r"(\s*$)",
-            # With quotes: version: "old_version"
-            r'(^\s*version:\s*["\'])'
-            + re.escape(str(current_version))
-            + r'(["\']\s*$)',
-        ]
+        # Generate variations of the current version to search for
+        versions_to_search = [str(current_version)]
+        if str(current_version).startswith("v"):
+            versions_to_search.append(str(current_version)[1:])
+        else:
+            versions_to_search.append("v" + str(current_version))
+        versions_to_search = list(dict.fromkeys(versions_to_search))
+
+        logging.debug("Searching for current versions: %s", versions_to_search)
 
         updated = False
-        for pattern in patterns:
-            if re.search(pattern, content, re.MULTILINE):
-                # Use a lambda function to avoid backreference issues in the replacement string
-                def replacement(match):
-                    return match.group(1) + str(new_version) + match.group(2)
+        for version_to_find in versions_to_search:
+            # Pattern to match version field in chart spec
+            patterns = [
+                # Standard format: version: old_version
+                r"(^\s*version:\s*)" + re.escape(version_to_find) + r"(\s*$)",
+                # With quotes: version: "old_version"
+                r'(^\s*version:\s*["\'])'
+                + re.escape(version_to_find)
+                + r'(["\']\s*$)',
+            ]
 
-                content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
-                updated = True
-                logging.info(
-                    "Updated version from %s to %s in manifest",
-                    current_version,
-                    new_version,
-                )
+            for pattern in patterns:
+                if re.search(pattern, content, re.MULTILINE):
+                    # Determine how to format the new version based on what we found to preserve convention
+                    matched_has_v = version_to_find.startswith("v")
+                    
+                    final_new_version = str(new_version)
+                    if matched_has_v and not final_new_version.startswith("v"):
+                         final_new_version = "v" + final_new_version
+                    elif not matched_has_v and final_new_version.startswith("v"):
+                         final_new_version = final_new_version[1:]
+
+                    # Use a lambda function to avoid backreference issues in the replacement string
+                    def replacement(match):
+                        return match.group(1) + final_new_version + match.group(2)
+
+                    content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
+                    updated = True
+                    logging.info(
+                        "Updated version from %s to %s in manifest (matched %s)",
+                        current_version,
+                        final_new_version,
+                        version_to_find
+                    )
+                    break
+            if updated:
                 break
 
         if not updated:
             logging.warning(
                 "No version field found to update in manifest (searched for: %s)",
-                current_version,
+                versions_to_search,
             )
             return False
 
@@ -1280,48 +1311,78 @@ def update_oci_repository_manifest(
         # Check if the file already contains the target version
         import re
 
-        target_tag_patterns = [
-            r"(^\s*tag:\s*)" + re.escape(str(new_version)) + r"(\s*$)",
-            r'(^\s*tag:\s*["\'])' + re.escape(str(new_version)) + r'(["\']\s*$)',
-        ]
+        # Check if the file already contains the target version
+        import re
 
-        for pattern in target_tag_patterns:
-            if re.search(pattern, content, re.MULTILINE):
-                logging.info(
-                    "✅ OCIRepository already contains target tag %s, no update needed",
-                    new_version,
-                )
-                return True
+        # We need to check if the target version is present, potentially with or without 'v'
+        target_versions = [str(new_version)]
+        if str(new_version).startswith("v"):
+            target_versions.append(str(new_version)[1:])
+        else:
+            target_versions.append("v" + str(new_version))
 
-        # Update the tag field under spec.ref
-        # Look for patterns like:
-        # spec:
-        #   ref:
-        #     tag: old_version
-        tag_patterns = [
-            r"(^\s*tag:\s*)" + re.escape(str(current_version)) + r"(\s*$)",
-            r'(^\s*tag:\s*["\'])' + re.escape(str(current_version)) + r'(["\']\s*$)',
-        ]
+        for t_ver in target_versions:
+            target_tag_patterns = [
+                r"(^\s*tag:\s*)" + re.escape(t_ver) + r"(\s*$)",
+                r'(^\s*tag:\s*["\'])' + re.escape(t_ver) + r'(["\']\s*$)',
+            ]
+            for pattern in target_tag_patterns:
+                if re.search(pattern, content, re.MULTILINE):
+                    logging.info(
+                        "✅ OCIRepository already contains target tag %s (matched %s), no update needed",
+                        new_version,
+                        t_ver
+                    )
+                    return True
+
+        # Generate variations of the current version to search for
+        versions_to_search = [str(current_version)]
+        if str(current_version).startswith("v"):
+            versions_to_search.append(str(current_version)[1:])
+        else:
+            versions_to_search.append("v" + str(current_version))
+        versions_to_search = list(dict.fromkeys(versions_to_search))
+
+        logging.debug("Searching for current tags: %s", versions_to_search)
 
         updated = False
-        for pattern in tag_patterns:
-            if re.search(pattern, content, re.MULTILINE):
-                def replacement(match):
-                    return match.group(1) + str(new_version) + match.group(2)
+        for version_to_find in versions_to_search:
+            # Update the tag field under spec.ref
+            tag_patterns = [
+                r"(^\s*tag:\s*)" + re.escape(version_to_find) + r"(\s*$)",
+                r'(^\s*tag:\s*["\'])' + re.escape(version_to_find) + r'(["\']\s*$)',
+            ]
 
-                content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
-                updated = True
-                logging.info(
-                    "Updated OCIRepository tag from %s to %s",
-                    current_version,
-                    new_version,
-                )
+            for pattern in tag_patterns:
+                if re.search(pattern, content, re.MULTILINE):
+                    # Determine how to format the new version based on what we found to preserve convention
+                    matched_has_v = version_to_find.startswith("v")
+                    
+                    final_new_version = str(new_version)
+                    if matched_has_v and not final_new_version.startswith("v"):
+                         final_new_version = "v" + final_new_version
+                    elif not matched_has_v and final_new_version.startswith("v"):
+                         final_new_version = final_new_version[1:]
+
+                    def replacement(match):
+                        return match.group(1) + final_new_version + match.group(2)
+
+                    content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
+                    updated = True
+                    logging.info(
+                        "Updated OCIRepository tag from %s to %s (matched %s)",
+                        current_version,
+                        final_new_version,
+                        version_to_find
+                    )
+                    break
+            if updated:
                 break
 
         if not updated:
             logging.warning(
                 "No tag field found to update in OCIRepository (searched for: %s)",
-                current_version,
+                versions_to_search,
             )
             return False
 
