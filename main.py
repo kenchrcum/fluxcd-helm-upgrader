@@ -2395,7 +2395,7 @@ def get_current_chart_name_and_version(
 
     # Fallback: if still no chart name, use the HelmRelease name (common for OCI)
     if not chart_name:
-        chart_name = hr.get("metadata", {}).get("name", "")
+        chart_name = hr.get("metadata", {}).get("name")
         logging.debug("%s/%s: using HelmRelease name as chart name: '%s'", hr_ns, hr_name, chart_name)
 
     # Debug logging for chart structure
@@ -2577,6 +2577,35 @@ def latest_available_version(
     return best_version_text
 
 
+def should_update(current_version_text: Optional[str], latest_version_text: Optional[str]) -> bool:
+    """
+    Determine if an update should be performed based on version comparison.
+    
+    Returns True if latest_version_text is semantically greater than current_version_text.
+    Returns False if latest_version_text is None, invalid, equal, or older.
+    Returns True if current_version_text is None or invalid, but latest_version_text is valid (upgrade from unknown).
+    """
+    if not latest_version_text:
+        return False
+        
+    latest_ver = parse_version(latest_version_text)
+    if not latest_ver:
+        return False
+        
+    if not current_version_text:
+        # If no current version is installed/detected, we should install the latest
+        return True
+        
+    current_ver = parse_version(current_version_text)
+    if not current_ver:
+        # If current version is invalid/unknown, we assume we should update to the valid latest
+        return True
+        
+    # Only update if latest > current
+    return latest_ver > current_ver
+
+
+
 def clear_caches() -> None:
     """Clear all caches to prevent memory buildup."""
     global _version_cache, _manifest_cache
@@ -2721,8 +2750,9 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                 up_to_date_count += 1
                 continue
             
-        if current_version_text == latest_text:
-            logging.info("%s/%s: CRD already at %s (installed version may be outdated) - skipping", hr_ns, hr_name, latest_text)
+            
+        if not should_update(current_version_text, latest_text):
+            logging.info("%s/%s: skipping update (%s is not > %s)", hr_ns, hr_name, latest_text, current_version_text)
             up_to_date_count += 1
             continue
 
