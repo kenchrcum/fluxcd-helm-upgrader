@@ -46,6 +46,7 @@ RUN apk add --no-cache \
     libc6-compat \
     helm \
     tar \
+    skopeo \
     && rm -rf /var/cache/apk/*
 
 # Copy virtual environment from builder stage
@@ -65,7 +66,7 @@ RUN /opt/venv/bin/pip install -U pip
 WORKDIR /app
 
 # Copy application code
-COPY main.py nova_integration.py ./
+COPY main.py nova_integration.py oci_integration.py version_utils.py ./
 
 # Create non-root user and set permissions
 RUN addgroup -g 10001 -S appuser && \

@@ -2461,28 +2461,7 @@ def get_current_chart_name_and_version(
 
 
 # Cache for parsed versions to avoid repeated parsing
-_version_cache: Dict[str, Optional[semver.VersionInfo]] = {}
-
-def parse_version(text: Optional[str]) -> Optional[semver.VersionInfo]:
-    """Parse version string with caching for performance."""
-    if not text:
-        return None
-    
-    # Check cache first
-    if text in _version_cache:
-        return _version_cache[text]
-    
-    raw = text.strip()
-    if raw.startswith("v"):
-        raw = raw[1:]
-    
-    try:
-        version = semver.VersionInfo.parse(raw)
-        _version_cache[text] = version
-        return version
-    except ValueError:
-        _version_cache[text] = None
-        return None
+from version_utils import parse_version, _version_cache, is_pre_release_ver
 
 
 def fetch_repo_index(repo: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -2567,7 +2546,7 @@ def latest_available_version(
         if not ver:
             continue
             
-        if not include_prerelease and ver.prerelease is not None:
+        if not include_prerelease and is_pre_release_ver(ver):
             continue
             
         if best_version is None or ver > best_version:
@@ -2594,7 +2573,7 @@ def should_update(current_version_text: Optional[str], latest_version_text: Opti
         return False
         
     # Check pre-release status
-    if not include_prerelease and latest_ver.prerelease:
+    if not include_prerelease and is_pre_release_ver(latest_ver):
         return False
         
     if not current_version_text:
@@ -2756,10 +2735,71 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                 continue
             
             
+            
         if not should_update(current_version_text, latest_text, include_prerelease=INCLUDE_PRERELEASE):
-            logging.info("%s/%s: skipping update (%s is not > %s or pre-release filtered)", hr_ns, hr_name, latest_text, current_version_text)
-            up_to_date_count += 1
-            continue
+            # Fallback logic: If update was skipped due to pre-release filtering,
+            # try to find a stable version using OCI integration if applicable
+            updated_latest_text = None
+            if not INCLUDE_PRERELEASE and parse_version(latest_text) and is_pre_release_ver(parse_version(latest_text)):
+                # Check if this is an OCI chart
+                if repo_dir: # Assuming repo case
+                     # We need the OCI URL. Nova result has it?
+                     # We have the list of outdated releases from Nova earlier.
+                     # Let's see if we can find the OCI URL for this release.
+                     pass
+                     
+                # Alternatively, check if we found OCI info earlier or if we can resolve it
+                # Logic: We know hr_ns and hr_name.
+                # If it's an OCI repo, we can fetch tags.
+                
+                # Resolving OCI URL is complex here because we are iterating `releases`.
+                # We need to get the OCI URL from the HelmRelease or associated OCIRepository.
+                
+                # Check if this release corresponds to an OCI source
+                spec = hr.get("spec", {})
+                chart_ref = spec.get("chartRef")
+                
+                oci_url = None
+                if chart_ref and chart_ref.get("kind") == "OCIRepository":
+                     oci_ns = chart_ref.get("namespace") or hr_ns
+                     oci_name = chart_ref.get("name")
+                     oci_repo, _ = get_oci_repository(coapi, oci_ns, oci_name)
+                     if oci_repo:
+                         oci_url = (oci_repo.get("spec") or {}).get("url")
+                
+                # Also handle sourceRef kind: OCIRepository
+                if not oci_url:
+                     chart_spec = (spec.get("chart") or {}).get("spec") or {}
+                     src_ref = chart_spec.get("sourceRef") or {}
+                     if src_ref.get("kind") == "OCIRepository":
+                         oci_ns = src_ref.get("namespace") or hr_ns
+                         oci_name = src_ref.get("name")
+                         oci_repo, _ = get_oci_repository(coapi, oci_ns, oci_name)
+                         if oci_repo:
+                             oci_url = (oci_repo.get("spec") or {}).get("url")
+
+                if oci_url:
+                    logging.info("%s/%s: Nova found pre-release %s but stable required; checking OCI tags from %s", hr_ns, hr_name, latest_text, oci_url)
+                    from oci_integration import OciIntegration
+                    oci_client = OciIntegration()
+                    stable_latest = oci_client.get_latest_version(oci_url, include_prerelease=False)
+                    
+                    if stable_latest and should_update(current_version_text, stable_latest, include_prerelease=False):
+                        logging.info("%s/%s: Found stable alternative %s (replacing pre-release %s)", hr_ns, hr_name, stable_latest, latest_text)
+                        latest_text = stable_latest
+                        # Proceed with update
+                    else:
+                        logging.info("%s/%s: No suitable stable version found greater than current", hr_ns, hr_name)
+                        up_to_date_count += 1
+                        continue
+                else:
+                    logging.info("%s/%s: skipping update (%s is pre-release and not OCI-resolvable)", hr_ns, hr_name, latest_text)
+                    up_to_date_count += 1
+                    continue
+            else:
+                logging.info("%s/%s: skipping update (%s is not > %s)", hr_ns, hr_name, latest_text, current_version_text)
+                up_to_date_count += 1
+                continue
 
         manifest_rel_path = None
         if repo_dir:

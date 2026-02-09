@@ -6,7 +6,8 @@ import semver
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from main import parse_version, get_current_chart_name_and_version
+from version_utils import parse_version
+from main import get_current_chart_name_and_version
 
 
 class TestVersionParsing:
