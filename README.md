@@ -1,7 +1,7 @@
 # FluxCD Helm Upgrader
 
 [![AI Assisted](https://img.shields.io/badge/AI-Assisted_Development-blueviolet)](AI_DISCLAIMER.md)
-![Version](https://img.shields.io/badge/version-0.7.1-blue.svg)
+![Version](https://img.shields.io/badge/version-0.7.2-blue.svg)
 [![License](https://img.shields.io/badge/license-Unlicense-lightgrey.svg)](LICENSE)
 [![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/fluxcd-helm-upgrader)](https://artifacthub.io/packages/search?repo=fluxcd-helm-upgrader)
 
@@ -691,7 +691,7 @@ This runs the upgrader every 4 hours instead of continuously, which is more suit
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `image.repository` | Docker image repository | `kenchrcum/fluxcd-helm-upgrader` |
-| `image.tag` | Docker image tag | `0.7.1` |
+| `image.tag` | Docker image tag | `0.7.2` |
 | `image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `mode` | Deployment mode: `deployment` or `cronjob` | `deployment` |
 | `replicaCount` | Number of replicas (deployment mode only) | `1` |
