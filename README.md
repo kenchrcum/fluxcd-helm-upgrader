@@ -45,6 +45,20 @@ env:
     value: "--containers=true --helm-version=v3"
 ```
 
+### Pre-release Configuration
+
+By default, the upgrader ignores pre-release versions (e.g., `1.0.0-rc.1`, `2.0.0-alpha`, `1.5.0-nightly`). If you want to include these versions in your updates, you can enable the `includePrerelease` option:
+
+**Helm Configuration:**
+```yaml
+includePrerelease: true
+```
+
+**Environment Variable:**
+```bash
+INCLUDE_PRERELEASE=true
+```
+
 ### OCI HelmRelease Support
 
 The upgrader provides full support for OCI-based HelmReleases using FluxCD's `chartRef` structure:

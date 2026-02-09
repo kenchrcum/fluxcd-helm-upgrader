@@ -52,7 +52,7 @@ rbac:
 
 logLevel: INFO
 intervalSeconds: 300
-includePrerelease: false
+includePrerelease: false  # Set to true to include pre-release versions (e.g. rc, beta, alpha) in update checks
 
 podAnnotations: {}
 

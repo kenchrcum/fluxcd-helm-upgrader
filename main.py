@@ -2577,19 +2577,24 @@ def latest_available_version(
     return best_version_text
 
 
-def should_update(current_version_text: Optional[str], latest_version_text: Optional[str]) -> bool:
+def should_update(current_version_text: Optional[str], latest_version_text: Optional[str], include_prerelease: bool = False) -> bool:
     """
     Determine if an update should be performed based on version comparison.
     
     Returns True if latest_version_text is semantically greater than current_version_text.
     Returns False if latest_version_text is None, invalid, equal, or older.
     Returns True if current_version_text is None or invalid, but latest_version_text is valid (upgrade from unknown).
+    Respects include_prerelease flag: if False, will return False for pre-release latest versions.
     """
     if not latest_version_text:
         return False
         
     latest_ver = parse_version(latest_version_text)
     if not latest_ver:
+        return False
+        
+    # Check pre-release status
+    if not include_prerelease and latest_ver.prerelease:
         return False
         
     if not current_version_text:
@@ -2751,8 +2756,8 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                 continue
             
             
-        if not should_update(current_version_text, latest_text):
-            logging.info("%s/%s: skipping update (%s is not > %s)", hr_ns, hr_name, latest_text, current_version_text)
+        if not should_update(current_version_text, latest_text, include_prerelease=INCLUDE_PRERELEASE):
+            logging.info("%s/%s: skipping update (%s is not > %s or pre-release filtered)", hr_ns, hr_name, latest_text, current_version_text)
             up_to_date_count += 1
             continue
 
