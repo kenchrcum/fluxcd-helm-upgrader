@@ -54,10 +54,26 @@ By default, the upgrader ignores pre-release versions (e.g., `1.0.0-rc.1`, `2.0.
 includePrerelease: true
 ```
 
-**Environment Variable:**
-```bash
-INCLUDE_PRERELEASE=true
-```
+### Private Registry Configuration
+
+If you need to access private OCI registries (e.g., for `skopeo` to list tags), you can provide a Docker config secret.
+
+1. Create a secret containing your Docker credentials:
+   ```bash
+   kubectl create secret docker-registry my-registry-creds \
+     --docker-server=https://index.docker.io/v1/ \
+     --docker-username=myuser \
+     --docker-password=mypassword \
+     --docker-email=myemail
+   ```
+
+2. Configure the chart to use this secret:
+   ```yaml
+   registryAuth:
+     enabled: true
+     secretName: my-registry-creds
+   ```
+
 
 ### OCI HelmRelease Support
 

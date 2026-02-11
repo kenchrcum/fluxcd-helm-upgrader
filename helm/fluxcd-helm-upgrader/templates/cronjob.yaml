@@ -61,6 +61,10 @@ spec:
                   value: {{ .Values.repo.searchPattern | quote }}
                 - name: REPO_CLONE_DIR
                   value: {{ .Values.repo.cloneDir | quote }}
+                {{- if .Values.registryAuth.enabled }}
+                - name: DOCKER_CONFIG
+                  value: "/tmp/dockercfg"
+                {{- end }}
                 {{- if and .Values.repo.sshKeySecret.enabled .Values.repo.sshKeySecret.name }}
                 - name: SSH_PRIVATE_KEY_PATH
                   value: "/home/app/.ssh/private_key"
@@ -118,6 +122,11 @@ spec:
                   mountPath: /home/app/.ssh
                   readOnly: true
                 {{- end }}
+                {{- if .Values.registryAuth.enabled }}
+                - name: docker-config
+                  mountPath: /tmp/dockercfg
+                  readOnly: true
+                {{- end }}
               resources:
                 {{- toYaml .Values.resources | nindent 16 }}
           volumes:
@@ -136,6 +145,14 @@ spec:
                   - key: {{ .Values.repo.sshKeySecret.knownHosts }}
                     path: known_hosts
                   {{- end }}
+            {{- end }}
+            {{- if .Values.registryAuth.enabled }}
+            - name: docker-config
+              secret:
+                secretName: {{ .Values.registryAuth.secretName }}
+                items:
+                  - key: {{ .Values.registryAuth.key | default ".dockerconfigjson" }}
+                    path: config.json
             {{- end }}
           nodeSelector:
             {{- toYaml .Values.nodeSelector | nindent 12 }}

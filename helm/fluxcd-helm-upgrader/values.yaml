@@ -56,6 +56,12 @@ includePrerelease: false  # Set to true to include pre-release versions (e.g. rc
 
 podAnnotations: {}
 
+# Private container registry authentication for Skopeo (optional)
+registryAuth:
+  enabled: false
+  secretName: ""             # Name of the k8s secret type "kubernetes.io/dockerconfigjson"
+  key: ".dockerconfigjson"   # Key in the secret containing the config json
+
 # Git repository configuration to locate HelmRelease manifests in Flux repo
 repo:
   url: ""
