@@ -2693,38 +2693,52 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
 
             # Try to resolve the repository and check for updates using the classic method
             repo = resolve_repo_for_release(coapi, hr)
-            if not repo:
+            
+            # Check if it's an OCI chart before skipping
+            is_oci = False
+            spec = hr.get("spec", {})
+            chart_ref = spec.get("chartRef")
+            if chart_ref and chart_ref.get("kind") == "OCIRepository":
+                is_oci = True
+            else:
+                 chart_spec = (spec.get("chart") or {}).get("spec") or {}
+                 src_ref = chart_spec.get("sourceRef") or {}
+                 if src_ref.get("kind") == "OCIRepository":
+                     is_oci = True
+
+            if not repo and not is_oci:
                 logging.debug(
-                    "%s/%s: HelmRepository not resolved; skipping", hr_ns, hr_name
+                    "%s/%s: HelmRepository not resolved and not OCI; skipping", hr_ns, hr_name
                 )
                 up_to_date_count += 1
                 continue
 
-            spec = repo.get("spec") or {}
-            if spec.get("type") == "oci":
-                logging.debug(
-                    "%s/%s: OCI HelmRepository not supported in fallback method; skipping", hr_ns, hr_name
-                )
-                up_to_date_count += 1
-                continue
-
-            try:
-                index = fetch_repo_index(repo)
-                if not index:
-                    logging.debug("%s/%s: unable to fetch repo index; skipping", hr_ns, hr_name)
-                    METRICS['repository_index_fetches_total'].labels(status="failed").inc()
+            if repo:
+                spec = repo.get("spec") or {}
+                if spec.get("type") == "oci":
+                    logging.debug(
+                        "%s/%s: OCI HelmRepository not supported in fallback method; skipping", hr_ns, hr_name
+                    )
                     up_to_date_count += 1
                     continue
-                METRICS['repository_index_fetches_total'].labels(status="success").inc()
-            except Exception as e:
-                logging.error("Failed to fetch repository index", extra={"error_type": "index_fetch", "component": "repository", "namespace": hr_ns, "hr_name": hr_name})
-                METRICS['repository_index_fetches_total'].labels(status="error").inc()
-                METRICS['errors_total'].labels(error_type="index_fetch", component="repository").inc()
-                up_to_date_count += 1
-                continue
 
-            latest_text = latest_available_version(index, chart_name, INCLUDE_PRERELEASE)
-            if not latest_text:
+                try:
+                    index = fetch_repo_index(repo)
+                    if not index:
+                        logging.debug("%s/%s: unable to fetch repo index; skipping", hr_ns, hr_name)
+                        METRICS['repository_index_fetches_total'].labels(status="failed").inc()
+                        up_to_date_count += 1
+                        continue
+                    METRICS['repository_index_fetches_total'].labels(status="success").inc()
+                except Exception as e:
+                    logging.error("Failed to fetch repository index", extra={"error_type": "index_fetch", "component": "repository", "namespace": hr_ns, "hr_name": hr_name})
+                    METRICS['repository_index_fetches_total'].labels(status="error").inc()
+                    METRICS['errors_total'].labels(error_type="index_fetch", component="repository").inc()
+                    up_to_date_count += 1
+                    continue
+
+                latest_text = latest_available_version(index, chart_name, INCLUDE_PRERELEASE)
+            if not latest_text and not is_oci:
                 logging.debug(
                     "%s/%s: no versions found in repo index for chart %s; assuming up-to-date",
                     hr_ns,
@@ -2735,71 +2749,76 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                 continue
             
             
-            
-        if not should_update(current_version_text, latest_text, include_prerelease=INCLUDE_PRERELEASE):
-            # Fallback logic: If update was skipped due to pre-release filtering,
-            # try to find a stable version using OCI integration if applicable
-            updated_latest_text = None
-            if not INCLUDE_PRERELEASE and parse_version(latest_text) and is_pre_release_ver(parse_version(latest_text)):
-                # Check if this is an OCI chart
-                if repo_dir: # Assuming repo case
-                     # We need the OCI URL. Nova result has it?
-                     # We have the list of outdated releases from Nova earlier.
-                     # Let's see if we can find the OCI URL for this release.
-                     pass
-                     
-                # Alternatively, check if we found OCI info earlier or if we can resolve it
-                # Logic: We know hr_ns and hr_name.
-                # If it's an OCI repo, we can fetch tags.
-                
-                # Resolving OCI URL is complex here because we are iterating `releases`.
-                # We need to get the OCI URL from the HelmRelease or associated OCIRepository.
-                
-                # Check if this release corresponds to an OCI source
-                spec = hr.get("spec", {})
-                chart_ref = spec.get("chartRef")
-                
-                oci_url = None
-                if chart_ref and chart_ref.get("kind") == "OCIRepository":
-                     oci_ns = chart_ref.get("namespace") or hr_ns
-                     oci_name = chart_ref.get("name")
-                     oci_repo, _ = get_oci_repository(coapi, oci_ns, oci_name)
-                     if oci_repo:
-                         oci_url = (oci_repo.get("spec") or {}).get("url")
-                
-                # Also handle sourceRef kind: OCIRepository
-                if not oci_url:
-                     chart_spec = (spec.get("chart") or {}).get("spec") or {}
-                     src_ref = chart_spec.get("sourceRef") or {}
-                     if src_ref.get("kind") == "OCIRepository":
-                         oci_ns = src_ref.get("namespace") or hr_ns
-                         oci_name = src_ref.get("name")
-                         oci_repo, _ = get_oci_repository(coapi, oci_ns, oci_name)
-                         if oci_repo:
-                             oci_url = (oci_repo.get("spec") or {}).get("url")
+            # --- NEW LOGIC START: Check OCI Registry First ---
+        # If this is an OCI chart (OCIRepository), we prioritize querying the registry directly via Skopeo
+        # because Nova might not have auth configured or might be seeing cached/old index.
+        
+        oci_url = None
+        # Check if this release corresponds to an OCI source
+        spec = hr.get("spec", {})
+        chart_ref = spec.get("chartRef")
+        
+        if chart_ref and chart_ref.get("kind") == "OCIRepository":
+             oci_ns = chart_ref.get("namespace") or hr_ns
+             oci_name = chart_ref.get("name")
+             oci_repo, _ = get_oci_repository(coapi, oci_ns, oci_name)
+             if oci_repo:
+                 oci_url = (oci_repo.get("spec") or {}).get("url")
+        
+        # Also handle sourceRef kind: OCIRepository (Flux v2 legacy/alternative style)
+        if not oci_url:
+             chart_spec = (spec.get("chart") or {}).get("spec") or {}
+             src_ref = chart_spec.get("sourceRef") or {}
 
-                if oci_url:
-                    logging.info("%s/%s: Nova found pre-release %s but stable required; checking OCI tags from %s", hr_ns, hr_name, latest_text, oci_url)
-                    from oci_integration import OciIntegration
-                    oci_client = OciIntegration()
-                    stable_latest = oci_client.get_latest_version(oci_url, include_prerelease=False)
-                    
-                    if stable_latest and should_update(current_version_text, stable_latest, include_prerelease=False):
-                        logging.info("%s/%s: Found stable alternative %s (replacing pre-release %s)", hr_ns, hr_name, stable_latest, latest_text)
-                        latest_text = stable_latest
-                        # Proceed with update
-                    else:
-                        logging.info("%s/%s: No suitable stable version found greater than current", hr_ns, hr_name)
-                        up_to_date_count += 1
-                        continue
-                else:
-                    logging.info("%s/%s: skipping update (%s is pre-release and not OCI-resolvable)", hr_ns, hr_name, latest_text)
-                    up_to_date_count += 1
-                    continue
+             if src_ref.get("kind") == "OCIRepository":
+                 oci_ns = src_ref.get("namespace") or hr_ns
+                 oci_name = src_ref.get("name")
+                 oci_repo, _ = get_oci_repository(coapi, oci_ns, oci_name)
+                 if oci_repo:
+                     oci_url = (oci_repo.get("spec") or {}).get("url")
+
+        if oci_url:
+            logging.debug("%s/%s: Detected OCI chart from %s, querying registry directly...", hr_ns, hr_name, oci_url)
+            from oci_integration import OciIntegration
+            oci_client = OciIntegration()
+            oci_latest = oci_client.get_latest_version(oci_url, include_prerelease=INCLUDE_PRERELEASE)
+            
+            if oci_latest:
+                logging.info("%s/%s: OCI registry reports latest version: %s", hr_ns, hr_name, oci_latest)
+                latest_text = oci_latest
             else:
-                logging.info("%s/%s: skipping update (%s is not > %s)", hr_ns, hr_name, latest_text, current_version_text)
-                up_to_date_count += 1
-                continue
+                 logging.warning("%s/%s: Failed to get version from OCI registry %s, falling back to other methods", hr_ns, hr_name, oci_url)
+                 # Fallback to existing latest_text (from Nova/Repo) if available
+        # --- NEW LOGIC END ---
+
+        if not latest_text:
+            # If we didn't get it from OCI, and repository index logic didn't run or found nothing
+            # (Note: we should probably try to fetch via repo index if OCI failed, but for OCI charts repo index usually doesn't exist in same way)
+            # The existing logic below handles repo index fetching if 'repo' variable is set.
+            # But 'repo' is set at top of loop.
+            if not repo and not oci_url:
+                 # If no repo and not OCI, we can't do anything
+                 logging.debug("%s/%s: No repository or OCI URL found", hr_ns, hr_name)
+                 continue
+            if not latest_text and repo:
+                 # Fallback to repo index if we haven't found it yet
+                 index = fetch_repo_index(repo)
+                 if index:
+                     latest_text = latest_available_version(index, chart_name, INCLUDE_PRERELEASE)
+        
+        if not latest_text:
+             logging.debug("%s/%s: Could not determine latest version", hr_ns, hr_name)
+             continue
+
+        # Check update condition
+        if not should_update(current_version_text, latest_text, include_prerelease=INCLUDE_PRERELEASE):
+            logging.info("%s/%s: skipping update (%s is not > %s or pre-release filtered)", hr_ns, hr_name, latest_text, current_version_text)
+            up_to_date_count += 1
+            continue
+            
+        # Check if we are allowed to verify this chart via Nova (optional check, maybe skipped for OCI if trusted?)
+        # For now we proceed to PR creation.
+
 
         manifest_rel_path = None
         if repo_dir:
@@ -2896,7 +2915,6 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                     repo_dir, hr_ns, hr_name, latest_text
                 )
                 if branch_name:
-
                     if chart_ref and chart_ref.get("kind") == "OCIRepository":
                         # For OCI chartRef releases, update the OCIRepository manifest
                         oci_repo_name = chart_ref.get("name")
