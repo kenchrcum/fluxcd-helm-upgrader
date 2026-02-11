@@ -1,6 +1,6 @@
 image:
   repository: kenchrcum/fluxcd-helm-upgrader
-  tag: "0.7.2"
+  tag: "0.7.3"
   pullPolicy: IfNotPresent
 
 replicaCount: 1
