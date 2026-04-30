@@ -122,3 +122,4 @@ fluxcd-repo/
 *.pem
 *.key
 id_rsa*
+flux
