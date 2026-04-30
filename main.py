@@ -2684,6 +2684,13 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
         latest_text = outdated_lookup.get(lookup_key)
         if latest_text:
             logging.debug("Found match for %s/%s (lookup key: %s -> %s)", hr_ns, hr_name, lookup_key, latest_text)
+            # If Nova found a pre-release but we filter pre-releases, discard it
+            # so we fall back to the repo index to find the latest stable version.
+            if not INCLUDE_PRERELEASE:
+                parsed = parse_version(latest_text)
+                if parsed and is_pre_release_ver(parsed):
+                    logging.debug("%s/%s: Nova found pre-release %s, discarding to look for stable version in repo index", hr_ns, hr_name, latest_text)
+                    latest_text = None
         else:
             logging.debug("No match for %s/%s (lookup key: %s) - trying fallback method", hr_ns, hr_name, lookup_key)
 
