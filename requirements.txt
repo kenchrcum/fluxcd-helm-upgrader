@@ -1,5 +1,5 @@
 kubernetes==36.0.0
-requests==2.34.0
+requests==2.34.2
 PyYAML==6.0.3
 semver==3.0.4
 PyGitHub==2.9.1
