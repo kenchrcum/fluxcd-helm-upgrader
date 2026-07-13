@@ -1,4 +1,4 @@
-kubernetes==36.0.0
+kubernetes==36.0.3
 requests==2.34.2
 PyYAML==6.0.3
 semver==3.0.4
