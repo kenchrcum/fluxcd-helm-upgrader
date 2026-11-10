@@ -26,31 +26,71 @@ from prometheus_client import Counter, Histogram, Gauge, Info, generate_latest, 
 from nova_integration import NovaIntegration
 
 
-def parse_auto_merge_patterns(raw: str) -> List[str]:
-    """Parse GITHUB_AUTO_MERGE_HELMRELEASES into a list of patterns.
+MIN_AUTO_MERGE_INTERVAL_SECONDS = 10
 
-    Accepts a JSON list of strings or a comma-separated string. Raises
-    ValueError if the value is JSON but not a list of non-empty strings.
+
+def parse_auto_merge_entries(raw: str) -> List[Tuple[str, Optional[int]]]:
+    """Parse GITHUB_AUTO_MERGE_HELMRELEASES into (pattern, interval_seconds) tuples.
+
+    Accepts a JSON list or a comma-separated string. JSON list items are
+    either a pattern string ("name" or "namespace/name") or an object
+    {"name": <pattern>, "intervalSeconds": <int>} that additionally gives the
+    HelmRelease its own, shorter check interval. interval_seconds is None for
+    entries that just follow the global INTERVAL_SECONDS. Raises ValueError
+    on malformed input.
     """
     raw = (raw or "").strip()
     if not raw:
         return []
-    if raw.startswith(("[", "{", '"')):
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"GITHUB_AUTO_MERGE_HELMRELEASES must be valid JSON: {e}")
-        if isinstance(parsed, str):
-            parsed = [parsed]
-        if not isinstance(parsed, list) or not all(
-            isinstance(item, str) and item.strip() for item in parsed
-        ):
+    if not raw.startswith(("[", "{", '"')):
+        return [(item.strip(), None) for item in raw.split(",") if item.strip()]
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"GITHUB_AUTO_MERGE_HELMRELEASES must be valid JSON: {e}")
+    if isinstance(parsed, str):
+        parsed = [parsed]
+    if not isinstance(parsed, list):
+        raise ValueError(
+            "GITHUB_AUTO_MERGE_HELMRELEASES must be a JSON list of 'name' or "
+            "'namespace/name' strings or {\"name\": ..., \"intervalSeconds\": ...} objects"
+        )
+
+    entries: List[Tuple[str, Optional[int]]] = []
+    for item in parsed:
+        interval = None
+        if isinstance(item, dict):
+            unknown = set(item) - {"name", "intervalSeconds"}
+            if unknown:
+                raise ValueError(
+                    f"GITHUB_AUTO_MERGE_HELMRELEASES entry {item!r} has unknown keys: "
+                    f"{', '.join(sorted(unknown))}"
+                )
+            interval = item.get("intervalSeconds")
+            # bool is an int subclass; reject it explicitly
+            if interval is not None and (
+                isinstance(interval, bool)
+                or not isinstance(interval, int)
+                or interval < MIN_AUTO_MERGE_INTERVAL_SECONDS
+            ):
+                raise ValueError(
+                    f"intervalSeconds of GITHUB_AUTO_MERGE_HELMRELEASES entry {item!r} must be "
+                    f"an integer of at least {MIN_AUTO_MERGE_INTERVAL_SECONDS}"
+                )
+            item = item.get("name")
+        if not isinstance(item, str) or not item.strip():
             raise ValueError(
-                "GITHUB_AUTO_MERGE_HELMRELEASES must be a JSON list of "
-                "'name' or 'namespace/name' strings"
+                "GITHUB_AUTO_MERGE_HELMRELEASES entries must be 'name' or 'namespace/name' "
+                "strings or {\"name\": ..., \"intervalSeconds\": ...} objects"
             )
-        return [item.strip() for item in parsed]
-    return [item.strip() for item in raw.split(",") if item.strip()]
+        entries.append((item.strip(), interval))
+    return entries
+
+
+def parse_auto_merge_patterns(raw: str) -> List[str]:
+    """Return just the HelmRelease patterns of GITHUB_AUTO_MERGE_HELMRELEASES."""
+    return [pattern for pattern, _ in parse_auto_merge_entries(raw)]
 
 
 class Config:
@@ -118,6 +158,8 @@ class Config:
     # GitHub auto-merge configuration
     # JSON list (or comma-separated string) of HelmReleases whose update PRs are
     # merged automatically. Entries are "name" or "namespace/name"; globs allowed.
+    # An entry may also be {"name": ..., "intervalSeconds": N} to check that
+    # HelmRelease more often than INTERVAL_SECONDS.
     GITHUB_AUTO_MERGE_HELMRELEASES = os.getenv("GITHUB_AUTO_MERGE_HELMRELEASES", "").strip()
     GITHUB_AUTO_MERGE_METHOD = os.getenv("GITHUB_AUTO_MERGE_METHOD", "merge").strip().lower() or "merge"
     GITHUB_AUTO_MERGE_DELETE_BRANCH = os.getenv("GITHUB_AUTO_MERGE_DELETE_BRANCH", "true").lower() in (
@@ -971,6 +1013,40 @@ def determine_github_assignee(namespace: str, helmrelease_name: str) -> Optional
     return None
 
 
+def matches_helmrelease_pattern(pattern: str, namespace: str, helmrelease_name: str) -> bool:
+    """Match a "name" or "namespace/name" pattern (shell-style wildcards) against a HelmRelease."""
+    from fnmatch import fnmatchcase
+
+    target = f"{namespace}/{helmrelease_name}" if "/" in pattern else helmrelease_name
+    return fnmatchcase(target, pattern)
+
+
+def get_fast_check_intervals(default_interval: int) -> Dict[str, int]:
+    """Return {pattern: interval_seconds} for auto-merge entries with their own interval.
+
+    Only intervals shorter than the global one are returned; a longer interval
+    has no effect because every full cycle checks all HelmReleases anyway.
+    """
+    try:
+        entries = parse_auto_merge_entries(GITHUB_AUTO_MERGE_HELMRELEASES)
+    except ValueError as e:
+        logging.warning("Per-HelmRelease intervals disabled: %s", str(e))
+        return {}
+
+    intervals: Dict[str, int] = {}
+    for pattern, interval in entries:
+        if interval is None:
+            continue
+        if interval >= default_interval:
+            logging.warning(
+                "intervalSeconds %s for '%s' is not shorter than INTERVAL_SECONDS (%s), ignoring it",
+                interval, pattern, default_interval,
+            )
+            continue
+        intervals[pattern] = min(interval, intervals.get(pattern, interval))
+    return intervals
+
+
 def is_auto_merge_enabled(namespace: str, helmrelease_name: str) -> bool:
     """Return True if update PRs for this HelmRelease should be merged automatically.
 
@@ -978,8 +1054,6 @@ def is_auto_merge_enabled(namespace: str, helmrelease_name: str) -> bool:
     against "namespace/name", all others against the HelmRelease name only.
     Matching is exact, with shell-style wildcards (*, ?) supported.
     """
-    from fnmatch import fnmatchcase
-
     if not GITHUB_AUTO_MERGE_HELMRELEASES:
         return False
     try:
@@ -989,8 +1063,7 @@ def is_auto_merge_enabled(namespace: str, helmrelease_name: str) -> bool:
         return False
 
     for pattern in patterns:
-        target = f"{namespace}/{helmrelease_name}" if "/" in pattern else helmrelease_name
-        if fnmatchcase(target, pattern):
+        if matches_helmrelease_pattern(pattern, namespace, helmrelease_name):
             logging.debug(
                 "Auto-merge enabled for %s/%s (pattern: %s)", namespace, helmrelease_name, pattern
             )
@@ -2793,9 +2866,18 @@ def clear_caches() -> None:
     logging.debug("Cleared performance caches")
 
 
-def check_once(coapi: client.CustomObjectsApi) -> None:
-    """Perform a single check cycle with metrics instrumentation."""
+def check_once(
+    coapi: client.CustomObjectsApi, only_patterns: Optional[List[str]] = None
+) -> None:
+    """Perform a single check cycle with metrics instrumentation.
+
+    With only_patterns set this is a fast check: only HelmReleases matching one
+    of the "name" / "namespace/name" patterns are processed, the cluster-wide
+    Nova scan is skipped (versions come straight from the chart source) and the
+    cycle-level metrics are left untouched.
+    """
     start_time = time.time()
+    partial = only_patterns is not None
     
     try:
         releases, hr_version = list_helm_releases(coapi)
@@ -2805,12 +2887,31 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
             METRICS['errors_total'].labels(error_type="api_version", component="kubernetes").inc()
             return
         
-        # Update metrics
-        total_releases = len(releases)
-        METRICS['helm_releases_total'].set(total_releases)
-        
-        logging.info("Starting HelmRelease check cycle", 
-                    extra={"total_releases": total_releases, "api_version": hr_version})
+        if partial:
+            releases = [
+                hr for hr in releases
+                if any(
+                    matches_helmrelease_pattern(
+                        pattern, hr["metadata"]["namespace"], hr["metadata"]["name"]
+                    )
+                    for pattern in only_patterns
+                )
+            ]
+            if not releases:
+                logging.debug("Fast check: no HelmRelease matches %s", only_patterns)
+                return
+            total_releases = len(releases)
+            logging.info(
+                "Starting fast check for %s",
+                [f'{hr["metadata"]["namespace"]}/{hr["metadata"]["name"]}' for hr in releases],
+            )
+        else:
+            # Update metrics
+            total_releases = len(releases)
+            METRICS['helm_releases_total'].set(total_releases)
+
+            logging.info("Starting HelmRelease check cycle",
+                        extra={"total_releases": total_releases, "api_version": hr_version})
         
     except Exception as e:
         logging.error("Failed to list HelmReleases", extra={"error_type": "list_releases", "component": "kubernetes"})
@@ -2837,10 +2938,13 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
     outdated_count = 0
     up_to_date_count = 0
     
-    # Run nova scan
-    logging.info("Running nova scan to detect outdated releases...")
-    nova_integration = NovaIntegration()
-    outdated_releases = nova_integration.get_outdated_releases()
+    # Run nova scan (skipped for fast checks: it scans the whole cluster)
+    if partial:
+        outdated_releases = []
+    else:
+        logging.info("Running nova scan to detect outdated releases...")
+        nova_integration = NovaIntegration()
+        outdated_releases = nova_integration.get_outdated_releases()
     
     # Build lookup: (target_namespace, release_name) -> latest_version
     outdated_lookup = {}
@@ -3212,6 +3316,11 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                     "⚠️  GitHub client not available, skipping PR creation"
                 )
     
+    if partial:
+        logging.info("Fast check completed",
+                    extra={"total_releases": total_releases, "outdated": outdated_count, "duration_seconds": time.time() - start_time})
+        return
+
     # Check which nova releases were not processed and which FluxCD CRDs were not matched
     processed_keys = set()
     fluxcd_releases = []
@@ -3316,24 +3425,53 @@ def main() -> None:
             clear_caches()  # Clean up before exit
         return
     
-    # Continuous mode for Deployment (original behavior)
+    # Continuous mode for Deployment: full cycles every `interval` seconds,
+    # plus fast checks for HelmReleases that configure a shorter interval.
+    fast_intervals = get_fast_check_intervals(interval)
+    for pattern, fast_interval in fast_intervals.items():
+        logging.info("⚡ Fast check interval for '%s': %ss", pattern, fast_interval)
+
+    next_full = time.monotonic()
+    next_fast = {pattern: next_full + fast_interval for pattern, fast_interval in fast_intervals.items()}
+
     while True:
-        cycle_count += 1
-        logging.info("🔄 Starting check cycle #%d...", cycle_count)
-        
-        try:
-            check_once(coapi)
-            logging.info("✅ Check cycle #%d completed", cycle_count)
-            
-            # Clear caches periodically to prevent memory buildup
-            if cycle_count % 10 == 0:
-                clear_caches()
-                
-        except Exception:
-            logging.exception("❌ Unexpected failure during check loop #%d", cycle_count)
-            
-        logging.info("⏰ Sleeping for %s seconds...", interval)
-        time.sleep(interval)
+        now = time.monotonic()
+        if now >= next_full:
+            cycle_count += 1
+            logging.info("🔄 Starting check cycle #%d...", cycle_count)
+
+            try:
+                check_once(coapi)
+                logging.info("✅ Check cycle #%d completed", cycle_count)
+
+                # Clear caches periodically to prevent memory buildup
+                if cycle_count % 10 == 0:
+                    clear_caches()
+
+            except Exception:
+                logging.exception("❌ Unexpected failure during check loop #%d", cycle_count)
+
+            # A full cycle covers every HelmRelease, so all fast timers restart
+            done = time.monotonic()
+            next_full = done + interval
+            next_fast = {pattern: done + fast_interval for pattern, fast_interval in fast_intervals.items()}
+        else:
+            due = [pattern for pattern, due_at in next_fast.items() if due_at <= now]
+            if due:
+                try:
+                    check_once(coapi, only_patterns=due)
+                except Exception:
+                    logging.exception("❌ Unexpected failure during fast check for %s", due)
+                done = time.monotonic()
+                for pattern in due:
+                    next_fast[pattern] = done + fast_intervals[pattern]
+
+        sleep_seconds = max(0.0, min([next_full, *next_fast.values()]) - time.monotonic())
+        if fast_intervals:
+            logging.debug("⏰ Sleeping for %.0f seconds...", sleep_seconds)
+        else:
+            logging.info("⏰ Sleeping for %.0f seconds...", sleep_seconds)
+        time.sleep(sleep_seconds)
 
 
 if __name__ == "__main__":

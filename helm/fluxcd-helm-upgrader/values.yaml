@@ -100,6 +100,12 @@ github:
   autoMerge:
     # HelmReleases to auto-merge, as "name" (any namespace) or "namespace/name".
     # Shell-style wildcards are supported, e.g. "staging/*".
+    # An entry can also be an object with its own check interval, shorter than
+    # the global intervalSeconds (deployment mode only, minimum 10):
+    #   helmReleases:
+    #     - "my-app"
+    #     - name: "tools/internal-tool"
+    #       intervalSeconds: 60
     helmReleases: []
     method: "merge"            # Merge method: merge, squash or rebase
     deleteBranch: true         # Delete the update branch after merging

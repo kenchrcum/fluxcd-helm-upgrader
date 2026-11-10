@@ -364,7 +364,29 @@ env:
 - Only open PRs on the upgrader's own `update-…` branch are merged. A PR you closed manually is never merged or re-created.
 - If GitHub refuses the merge (e.g. required status checks are still running), the upgrader enables GitHub's native auto-merge for the PR (requires "Allow auto-merge" in the repository settings) and additionally retries on every following check cycle.
 - The GitHub token needs permission to merge PRs (`contents: write` and `pull requests: write`), and branch protection must allow the token's user to merge.
-- Combine with a short `intervalSeconds` (or CronJob schedule) to roll out new chart versions quickly.
+
+**Per-HelmRelease check interval:**
+
+A release that should be deployed right after it is built can get its own, shorter check interval, while everything else stays on the global `intervalSeconds` so you don't run into rate limits:
+
+```yaml
+intervalSeconds: 3600           # everything else: once per hour
+github:
+  autoMerge:
+    helmReleases:
+      - "my-app"                # auto-merge, checked every 3600s
+      - name: "tools/internal-tool"
+        intervalSeconds: 60     # auto-merge, checked every 60s
+
+# Or via environment variable
+env:
+  - name: GITHUB_AUTO_MERGE_HELMRELEASES
+    value: '["my-app", {"name": "tools/internal-tool", "intervalSeconds": 60}]'
+```
+
+- Between two full cycles the upgrader runs *fast checks* that only look at the releases with their own interval. They skip the cluster-wide Nova scan and query only that release's chart source (Helm repository index or OCI registry); the GitHub API is only called when a newer version is actually found.
+- `intervalSeconds` must be at least 10 and shorter than the global interval, otherwise it is ignored.
+- Only available in deployment (continuous) mode. In CronJob mode every run is a full check, so the schedule is the interval.
 
 #### Example Helm Install with GitHub PRs
 
@@ -777,7 +799,7 @@ This runs the upgrader every 4 hours instead of continuously, which is more suit
 | `github.defaultAssignee` | Default GitHub user to assign to all PRs | `""` |
 | `github.assigneesByNamespace` | JSON mapping of namespaces to GitHub users | `""` |
 | `github.assigneesByHelmRelease` | JSON mapping of HelmRelease names to GitHub users | `""` |
-| `github.autoMerge.helmReleases` | HelmReleases (`name` or `namespace/name`, wildcards allowed) whose update PRs are merged automatically | `[]` |
+| `github.autoMerge.helmReleases` | HelmReleases (`name` or `namespace/name`, wildcards allowed) whose update PRs are merged automatically. Entries may be objects `{name, intervalSeconds}` to check a release more often than `intervalSeconds` | `[]` |
 | `github.autoMerge.method` | Merge method: `merge`, `squash` or `rebase` | `merge` |
 | `github.autoMerge.deleteBranch` | Delete the update branch after auto-merging | `true` |
 | `git.userName` | Git user name for commits | `fluxcd-helm-upgrader` |
@@ -808,7 +830,7 @@ This runs the upgrader every 4 hours instead of continuously, which is more suit
 - `GITHUB_DEFAULT_ASSIGNEE`: Default GitHub username to assign to all created PRs
 - `GITHUB_ASSIGNEES_BY_NAMESPACE`: JSON string mapping namespaces to GitHub usernames (e.g., '{"production": "platform-team", "staging": "devops-team"}')
 - `GITHUB_ASSIGNEES_BY_HELMRELEASE`: JSON string mapping HelmRelease names to GitHub usernames (e.g., '{"prometheus": "monitoring-team", "nginx": "platform-team"}')
-- `GITHUB_AUTO_MERGE_HELMRELEASES`: JSON list (or comma-separated string) of HelmReleases whose update PRs are merged automatically, as `name` or `namespace/name`, wildcards allowed (e.g., '["my-app", "staging/*"]')
+- `GITHUB_AUTO_MERGE_HELMRELEASES`: JSON list (or comma-separated string) of HelmReleases whose update PRs are merged automatically, as `name` or `namespace/name`, wildcards allowed (e.g., '["my-app", "staging/*"]'). An entry may be an object with its own, shorter check interval (e.g., '[{"name": "tools/internal-tool", "intervalSeconds": 60}]')
 - `GITHUB_AUTO_MERGE_METHOD`: Merge method for auto-merged PRs: `merge`, `squash` or `rebase` (default: merge)
 - `GITHUB_AUTO_MERGE_DELETE_BRANCH`: Delete the update branch after auto-merging (default: true)
 - `GIT_USER_NAME`: Git user name for commits (default: fluxcd-helm-upgrader)

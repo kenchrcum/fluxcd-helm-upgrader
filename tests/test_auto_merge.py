@@ -235,3 +235,98 @@ class TestPullRequestBody:
         body = self._body(True)
         assert "### Auto-merge" in body
         assert "### Testing" not in body
+
+
+class TestAutoMergeIntervals:
+    """Per-HelmRelease check intervals."""
+
+    def test_parse_entries_with_interval(self):
+        raw = '["my-app", {"name": "tools/internal", "intervalSeconds": 60}, {"name": "other"}]'
+        assert main.parse_auto_merge_entries(raw) == [
+            ("my-app", None), ("tools/internal", 60), ("other", None),
+        ]
+        assert parse_auto_merge_patterns(raw) == ["my-app", "tools/internal", "other"]
+
+    @pytest.mark.parametrize("raw", [
+        '[{"name": "a", "intervalSeconds": 5}]',       # below minimum
+        '[{"name": "a", "intervalSeconds": "60"}]',
+        '[{"name": "a", "intervalSeconds": true}]',
+        '[{"intervalSeconds": 60}]',
+        '[{"name": "a", "interval": 60}]',             # typo must not be ignored silently
+    ])
+    def test_parse_entries_invalid(self, raw):
+        with pytest.raises(ValueError, match="GITHUB_AUTO_MERGE_HELMRELEASES"):
+            main.parse_auto_merge_entries(raw)
+
+    def test_object_entries_enable_auto_merge(self):
+        with patch('main.GITHUB_AUTO_MERGE_HELMRELEASES', '[{"name": "tools/internal", "intervalSeconds": 60}]'):
+            assert is_auto_merge_enabled("tools", "internal")
+            assert not is_auto_merge_enabled("apps", "internal")
+
+    def test_fast_intervals_only_shorter_than_default(self):
+        raw = '["a", {"name": "b", "intervalSeconds": 60}, {"name": "c", "intervalSeconds": 7200}]'
+        with patch('main.GITHUB_AUTO_MERGE_HELMRELEASES', raw):
+            assert main.get_fast_check_intervals(3600) == {"b": 60}
+
+    def test_fast_intervals_empty_without_config(self):
+        with patch('main.GITHUB_AUTO_MERGE_HELMRELEASES', ''):
+            assert main.get_fast_check_intervals(3600) == {}
+
+    def _hr(self, namespace, name):
+        return {"metadata": {"namespace": namespace, "name": name}, "spec": {}}
+
+    def test_fast_check_only_processes_matching_releases_without_nova(self):
+        releases = [self._hr("tools", "internal"), self._hr("apps", "other")]
+        with patch('main.list_helm_releases', return_value=(releases, "v2")), \
+             patch('main.REPO_URL', ''), \
+             patch('main.NovaIntegration') as nova, \
+             patch('main.get_current_chart_name_and_version', return_value=(None, None)) as get_chart, \
+             patch.dict(main.METRICS, {'helm_releases_total': MagicMock()}):
+            main.check_once(MagicMock(), only_patterns=["tools/internal"])
+
+            nova.assert_not_called()
+            assert [c.args[1]["metadata"]["name"] for c in get_chart.call_args_list] == ["internal"]
+            main.METRICS['helm_releases_total'].set.assert_not_called()
+
+    def test_fast_check_without_match_does_nothing(self):
+        with patch('main.list_helm_releases', return_value=([self._hr("apps", "other")], "v2")), \
+             patch('main.ensure_repo_cloned_or_updated') as clone, \
+             patch('main.NovaIntegration') as nova:
+            main.check_once(MagicMock(), only_patterns=["tools/internal"])
+            clone.assert_not_called()
+            nova.assert_not_called()
+
+    def test_main_loop_schedules_fast_checks_between_full_cycles(self):
+        """interval 100s, fast 30s -> full, fast@30, fast@60, fast@90, full@100."""
+        clock = [0.0]
+        calls = []
+
+        def fake_sleep(seconds):
+            clock[0] += seconds
+            if len(calls) >= 5:
+                raise KeyboardInterrupt
+
+        def fake_check(coapi, only_patterns=None):
+            calls.append((clock[0], only_patterns))
+
+        raw = '[{"name": "tools/internal", "intervalSeconds": 30}]'
+        with patch('main.GITHUB_AUTO_MERGE_HELMRELEASES', raw), \
+             patch.object(Config, 'DEFAULT_INTERVAL_SECONDS', 100), \
+             patch.object(Config, 'validate_configuration', return_value=(True, [])), \
+             patch.dict(os.environ, {"RUN_MODE": "continuous"}), \
+             patch('main.configure_logging'), patch('main.initialize_metrics'), \
+             patch('main.load_kube_config'), patch('main.start_health_server'), \
+             patch('main.GitHubManager'), \
+             patch('main.check_once', side_effect=fake_check), \
+             patch('main.time.monotonic', side_effect=lambda: clock[0]), \
+             patch('main.time.sleep', side_effect=fake_sleep):
+            with pytest.raises(KeyboardInterrupt):
+                main.main()
+
+        assert calls == [
+            (0.0, None),
+            (30.0, ["tools/internal"]),
+            (60.0, ["tools/internal"]),
+            (90.0, ["tools/internal"]),
+            (100.0, None),
+        ]
