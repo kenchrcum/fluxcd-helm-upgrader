@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Build stage
-FROM alpine:3.24.3 AS builder
+FROM alpine:3.24.4 AS builder
 
 # Upgrade system packages
 RUN apk upgrade --no-cache
@@ -31,7 +31,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Runtime stage
-FROM alpine:3.24.3
+FROM alpine:3.24.4
 
 # Upgrade system packages
 RUN apk upgrade --no-cache
