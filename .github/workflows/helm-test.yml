@@ -61,7 +61,7 @@ jobs:
       - name: Run helm template
         run: |
           cd helm/fluxcd-helm-upgrader
-          helm template test-release . --dry-run=server --debug
+          helm template test-release . --dry-run=client --debug
 
       - name: Package chart
         run: |
