@@ -336,6 +336,36 @@ env:
 **Pattern Matching:** You can also use partial name matching. For example, if you have `"monitoring"` as a key, it will match any HelmRelease name containing "monitoring".
 ```
 
+#### Configure Auto-Merge (Optional)
+
+For selected HelmReleases the upgrader can merge its own update PR right after creating it — useful for charts that release often and should roll out without manual review.
+
+```yaml
+github:
+  autoMerge:
+    helmReleases:
+      - "my-app"              # HelmRelease "my-app" in any namespace
+      - "staging/other-app"   # only in namespace "staging"
+      - "dev/*"               # shell-style wildcards are supported
+    method: "merge"           # merge, squash or rebase
+    deleteBranch: true        # delete the update branch after merging
+
+# Or via environment variables
+env:
+  - name: GITHUB_AUTO_MERGE_HELMRELEASES
+    value: '["my-app", "staging/other-app"]'
+  - name: GITHUB_AUTO_MERGE_METHOD
+    value: "merge"
+```
+
+**How it works:**
+
+- Entries match the HelmRelease name exactly (or `namespace/name`); unlike assignees there is no substring matching.
+- Only open PRs on the upgrader's own `update-…` branch are merged. A PR you closed manually is never merged or re-created.
+- If GitHub refuses the merge (e.g. required status checks are still running), the upgrader enables GitHub's native auto-merge for the PR (requires "Allow auto-merge" in the repository settings) and additionally retries on every following check cycle.
+- The GitHub token needs permission to merge PRs (`contents: write` and `pull requests: write`), and branch protection must allow the token's user to merge.
+- Combine with a short `intervalSeconds` (or CronJob schedule) to roll out new chart versions quickly.
+
 #### Example Helm Install with GitHub PRs
 
 ```bash
@@ -747,6 +777,9 @@ This runs the upgrader every 4 hours instead of continuously, which is more suit
 | `github.defaultAssignee` | Default GitHub user to assign to all PRs | `""` |
 | `github.assigneesByNamespace` | JSON mapping of namespaces to GitHub users | `""` |
 | `github.assigneesByHelmRelease` | JSON mapping of HelmRelease names to GitHub users | `""` |
+| `github.autoMerge.helmReleases` | HelmReleases (`name` or `namespace/name`, wildcards allowed) whose update PRs are merged automatically | `[]` |
+| `github.autoMerge.method` | Merge method: `merge`, `squash` or `rebase` | `merge` |
+| `github.autoMerge.deleteBranch` | Delete the update branch after auto-merging | `true` |
 | `git.userName` | Git user name for commits | `fluxcd-helm-upgrader` |
 | `git.userEmail` | Git user email for commits | `fluxcd-helm-upgrader@noreply.local` |
 | `git.forcePush` | Force push existing branches | `false` |
@@ -775,6 +808,9 @@ This runs the upgrader every 4 hours instead of continuously, which is more suit
 - `GITHUB_DEFAULT_ASSIGNEE`: Default GitHub username to assign to all created PRs
 - `GITHUB_ASSIGNEES_BY_NAMESPACE`: JSON string mapping namespaces to GitHub usernames (e.g., '{"production": "platform-team", "staging": "devops-team"}')
 - `GITHUB_ASSIGNEES_BY_HELMRELEASE`: JSON string mapping HelmRelease names to GitHub usernames (e.g., '{"prometheus": "monitoring-team", "nginx": "platform-team"}')
+- `GITHUB_AUTO_MERGE_HELMRELEASES`: JSON list (or comma-separated string) of HelmReleases whose update PRs are merged automatically, as `name` or `namespace/name`, wildcards allowed (e.g., '["my-app", "staging/*"]')
+- `GITHUB_AUTO_MERGE_METHOD`: Merge method for auto-merged PRs: `merge`, `squash` or `rebase` (default: merge)
+- `GITHUB_AUTO_MERGE_DELETE_BRANCH`: Delete the update branch after auto-merging (default: true)
 - `GIT_USER_NAME`: Git user name for commits (default: fluxcd-helm-upgrader)
 - `GIT_USER_EMAIL`: Git user email for commits (default: fluxcd-helm-upgrader@noreply.local)
 - `GIT_FORCE_PUSH`: Force push branches when they already exist (default: false)
