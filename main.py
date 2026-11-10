@@ -26,6 +26,33 @@ from prometheus_client import Counter, Histogram, Gauge, Info, generate_latest, 
 from nova_integration import NovaIntegration
 
 
+def parse_auto_merge_patterns(raw: str) -> List[str]:
+    """Parse GITHUB_AUTO_MERGE_HELMRELEASES into a list of patterns.
+
+    Accepts a JSON list of strings or a comma-separated string. Raises
+    ValueError if the value is JSON but not a list of non-empty strings.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    if raw.startswith(("[", "{", '"')):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"GITHUB_AUTO_MERGE_HELMRELEASES must be valid JSON: {e}")
+        if isinstance(parsed, str):
+            parsed = [parsed]
+        if not isinstance(parsed, list) or not all(
+            isinstance(item, str) and item.strip() for item in parsed
+        ):
+            raise ValueError(
+                "GITHUB_AUTO_MERGE_HELMRELEASES must be a JSON list of "
+                "'name' or 'namespace/name' strings"
+            )
+        return [item.strip() for item in parsed]
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 class Config:
     """Centralized configuration management."""
     
@@ -87,6 +114,15 @@ class Config:
     GITHUB_DEFAULT_ASSIGNEE = os.getenv("GITHUB_DEFAULT_ASSIGNEE", "").strip()
     GITHUB_ASSIGNEES_BY_NAMESPACE = os.getenv("GITHUB_ASSIGNEES_BY_NAMESPACE", "").strip()
     GITHUB_ASSIGNEES_BY_HELMRELEASE = os.getenv("GITHUB_ASSIGNEES_BY_HELMRELEASE", "").strip()
+
+    # GitHub auto-merge configuration
+    # JSON list (or comma-separated string) of HelmReleases whose update PRs are
+    # merged automatically. Entries are "name" or "namespace/name"; globs allowed.
+    GITHUB_AUTO_MERGE_HELMRELEASES = os.getenv("GITHUB_AUTO_MERGE_HELMRELEASES", "").strip()
+    GITHUB_AUTO_MERGE_METHOD = os.getenv("GITHUB_AUTO_MERGE_METHOD", "merge").strip().lower() or "merge"
+    GITHUB_AUTO_MERGE_DELETE_BRANCH = os.getenv("GITHUB_AUTO_MERGE_DELETE_BRANCH", "true").lower() in (
+        "1", "true", "yes", "on"
+    )
     
     @classmethod
     def get_boolean_env(cls, key: str, default: bool = False) -> bool:
@@ -177,6 +213,15 @@ class Config:
             except json.JSONDecodeError as e:
                 errors.append(f"GITHUB_ASSIGNEES_BY_HELMRELEASE must be valid JSON: {str(e)}")
 
+        # Validate auto-merge configuration
+        if cls.GITHUB_AUTO_MERGE_HELMRELEASES:
+            try:
+                parse_auto_merge_patterns(cls.GITHUB_AUTO_MERGE_HELMRELEASES)
+            except ValueError as e:
+                errors.append(str(e))
+        if cls.GITHUB_AUTO_MERGE_METHOD not in ("merge", "squash", "rebase"):
+            errors.append("GITHUB_AUTO_MERGE_METHOD must be one of: merge, squash, rebase")
+
         # Validate clone directory
         if cls.REPO_CLONE_DIR:
             clone_path = Path(cls.REPO_CLONE_DIR)
@@ -195,6 +240,7 @@ METRICS = {
     'helm_releases_up_to_date': Gauge('fluxcd_helm_upgrader_helm_releases_up_to_date', 'Number of HelmReleases that are up to date'),
     'updates_processed_total': Counter('fluxcd_helm_upgrader_updates_processed_total', 'Total number of updates processed', ['namespace', 'name', 'status']),
     'pull_requests_created_total': Counter('fluxcd_helm_upgrader_pull_requests_created_total', 'Total number of pull requests created', ['namespace', 'name']),
+    'pull_requests_merged_total': Counter('fluxcd_helm_upgrader_pull_requests_merged_total', 'Total number of pull requests merged automatically', ['namespace', 'name']),
     'git_operations_total': Counter('fluxcd_helm_upgrader_git_operations_total', 'Total number of git operations', ['operation', 'status']),
     'kubernetes_api_calls_total': Counter('fluxcd_helm_upgrader_kubernetes_api_calls_total', 'Total number of Kubernetes API calls', ['operation', 'status']),
     'github_api_calls_total': Counter('fluxcd_helm_upgrader_github_api_calls_total', 'Total number of GitHub API calls', ['operation', 'status']),
@@ -345,6 +391,9 @@ GIT_FORCE_PUSH = Config.GIT_FORCE_PUSH
 GITHUB_DEFAULT_ASSIGNEE = Config.GITHUB_DEFAULT_ASSIGNEE
 GITHUB_ASSIGNEES_BY_NAMESPACE = Config.GITHUB_ASSIGNEES_BY_NAMESPACE
 GITHUB_ASSIGNEES_BY_HELMRELEASE = Config.GITHUB_ASSIGNEES_BY_HELMRELEASE
+GITHUB_AUTO_MERGE_HELMRELEASES = Config.GITHUB_AUTO_MERGE_HELMRELEASES
+GITHUB_AUTO_MERGE_METHOD = Config.GITHUB_AUTO_MERGE_METHOD
+GITHUB_AUTO_MERGE_DELETE_BRANCH = Config.GITHUB_AUTO_MERGE_DELETE_BRANCH
 
 
 # Helper functions for common patterns
@@ -920,6 +969,139 @@ def determine_github_assignee(namespace: str, helmrelease_name: str) -> Optional
     # No assignee configured
     logging.debug("No assignee configured for %s/%s", namespace, helmrelease_name)
     return None
+
+
+def is_auto_merge_enabled(namespace: str, helmrelease_name: str) -> bool:
+    """Return True if update PRs for this HelmRelease should be merged automatically.
+
+    Entries in GITHUB_AUTO_MERGE_HELMRELEASES containing a "/" are matched
+    against "namespace/name", all others against the HelmRelease name only.
+    Matching is exact, with shell-style wildcards (*, ?) supported.
+    """
+    from fnmatch import fnmatchcase
+
+    if not GITHUB_AUTO_MERGE_HELMRELEASES:
+        return False
+    try:
+        patterns = parse_auto_merge_patterns(GITHUB_AUTO_MERGE_HELMRELEASES)
+    except ValueError as e:
+        logging.warning("Auto-merge disabled: %s", str(e))
+        return False
+
+    for pattern in patterns:
+        target = f"{namespace}/{helmrelease_name}" if "/" in pattern else helmrelease_name
+        if fnmatchcase(target, pattern):
+            logging.debug(
+                "Auto-merge enabled for %s/%s (pattern: %s)", namespace, helmrelease_name, pattern
+            )
+            return True
+    return False
+
+
+def auto_merge_pull_request(
+    github_client: Github,
+    pr_url: str,
+    namespace: str,
+    name: str,
+    branch_name: str,
+) -> bool:
+    """Merge the update PR for an auto-merge HelmRelease.
+
+    Only open PRs whose head branch is the upgrader's own update branch are
+    merged; PRs that a human closed are left alone. If GitHub refuses a direct
+    merge (e.g. required checks still running), GitHub's native auto-merge is
+    enabled as a fallback so the PR merges once its requirements are met. PRs
+    that stay open are retried on the next check cycle.
+
+    Returns True if the PR is merged (now or already), False otherwise.
+    """
+    try:
+        pr_number = int(str(pr_url).rstrip("/").split("/")[-1])
+    except ValueError:
+        logging.warning(
+            "⚠️  Cannot auto-merge %s/%s: no PR number in '%s'", namespace, name, pr_url
+        )
+        return False
+
+    try:
+        owner, repo_name = parse_github_repository(GITHUB_REPOSITORY)
+        repo = github_client.get_repo(f"{owner}/{repo_name}")
+        pr = repo.get_pull(pr_number)
+
+        if pr.merged:
+            logging.debug("PR %s is already merged", pr_url)
+            return True
+        if pr.state != "open":
+            logging.info(
+                "⏭️  PR %s was closed without merging, not auto-merging %s/%s",
+                pr_url, namespace, name,
+            )
+            return False
+        if pr.head.ref != branch_name:
+            logging.warning(
+                "⚠️  Not auto-merging %s: head branch '%s' is not the expected update branch '%s'",
+                pr_url, pr.head.ref, branch_name,
+            )
+            return False
+
+        max_attempts = 3
+        last_error: Optional[GithubException] = None
+        for attempt in range(max_attempts):
+            try:
+                result = pr.merge(merge_method=GITHUB_AUTO_MERGE_METHOD)
+                if result.merged:
+                    logging.info(
+                        "🚀 Auto-merged PR for %s/%s: %s", namespace, name, pr_url,
+                        extra={"namespace": namespace, "hr_name": name, "pr_url": pr_url, "status": "merged"},
+                    )
+                    METRICS['github_api_calls_total'].labels(operation="merge_pull_request", status="success").inc()
+                    METRICS['pull_requests_merged_total'].labels(namespace=namespace, name=name).inc()
+                    if GITHUB_AUTO_MERGE_DELETE_BRANCH:
+                        try:
+                            repo.get_git_ref(f"heads/{branch_name}").delete()
+                            logging.debug("Deleted merged branch %s", branch_name)
+                        except Exception as delete_error:
+                            # Typically already removed by the repository's
+                            # "automatically delete head branches" setting.
+                            logging.debug(
+                                "Could not delete branch %s: %s", branch_name, str(delete_error)
+                            )
+                    return True
+                logging.warning("⚠️  GitHub did not merge %s: %s", pr_url, result.message)
+                break
+            except GithubException as e:
+                last_error = e
+                # 405 = not mergeable (yet), 409 = head changed. Right after PR
+                # creation GitHub is often still computing mergeability.
+                if e.status in (405, 409) and attempt < max_attempts - 1:
+                    time.sleep((attempt + 1) * 2)
+                    continue
+                break
+
+        METRICS['github_api_calls_total'].labels(operation="merge_pull_request", status="failed").inc()
+        logging.warning(
+            "⚠️  Could not merge PR %s directly%s, trying GitHub native auto-merge",
+            pr_url, f" ({last_error})" if last_error else "",
+        )
+        try:
+            pr.enable_automerge(merge_method=GITHUB_AUTO_MERGE_METHOD.upper())
+            logging.info(
+                "⏳ Enabled GitHub auto-merge for %s; it will merge once all requirements are met",
+                pr_url,
+            )
+            METRICS['github_api_calls_total'].labels(operation="enable_automerge", status="success").inc()
+        except Exception as automerge_error:
+            logging.warning(
+                "⚠️  Could not enable GitHub auto-merge for %s (%s); will retry merging on the next check cycle",
+                pr_url, str(automerge_error),
+            )
+            METRICS['github_api_calls_total'].labels(operation="enable_automerge", status="failed").inc()
+        return False
+
+    except Exception:
+        logging.exception("❌ Unexpected error auto-merging PR %s", pr_url)
+        METRICS['github_api_calls_total'].labels(operation="merge_pull_request", status="error").inc()
+        return False
 
 
 def load_kube_config() -> client.CustomObjectsApi:
@@ -1723,6 +1905,7 @@ def create_github_pull_request(
     branch_name: str,
     manifest_path: str,
     oci_info: Optional[Dict[str, Any]] = None,
+    auto_merge: bool = False,
 ) -> Optional[str]:
     """Create a GitHub Pull Request for the HelmRelease update."""
     if not GITHUB_REPOSITORY:
@@ -1816,7 +1999,20 @@ def create_github_pull_request(
                     oci_section += f"- **OCI Registry:** {oci_url}\n"
                 if app_version:
                     oci_section += f"- **App Version:** {app_version}\n"
-                    oci_section += "\n⚠️ **Important:** Please verify this app version meets your stability requirements before merging.\n"
+                    if not auto_merge:
+                        oci_section += "\n⚠️ **Important:** Please verify this app version meets your stability requirements before merging.\n"
+
+        if auto_merge:
+            testing_section = (
+                "### Auto-merge\n"
+                "Auto-merge is enabled for this HelmRelease; this pull request is merged "
+                "automatically by the FluxCD Helm upgrader tool."
+            )
+        else:
+            testing_section = (
+                "### Testing\n"
+                "Please review the changes and test in a development environment before merging."
+            )
 
         body = f"""## Helm Chart Update
 
@@ -1834,8 +2030,7 @@ This pull request updates the HelmRelease for {name} in namespace {namespace} to
 
 The update was automatically generated by the FluxCD Helm upgrader tool.
 
-### Testing
-Please review the changes and test in a development environment before merging.
+{testing_section}
 """
 
         # Create the pull request with retry logic for specific errors
@@ -2895,6 +3090,8 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                     ".", "-"
                 )
 
+                auto_merge = is_auto_merge_enabled(hr_ns, hr_name)
+
                 existing_pr = check_if_pr_already_exists(
                     github_client, hr_ns, hr_name, branch_name, latest_text
                 )
@@ -2916,6 +3113,12 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                     logging.info(
                         "✅ Skipping file operations since PR is already created"
                     )
+
+                    # Retry merging a still-open PR from an earlier cycle
+                    if auto_merge:
+                        auto_merge_pull_request(
+                            github_client, existing_pr, hr_ns, hr_name, branch_name
+                        )
                     continue  # Skip to next HelmRelease
 
                 branch_name = create_update_branch(
@@ -2963,6 +3166,7 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                                 branch_name,
                                 manifest_rel_path,
                                 oci_info,
+                                auto_merge=auto_merge,
                             )
                             if pr_url:
                                 logging.info(
@@ -2974,6 +3178,11 @@ def check_once(coapi: client.CustomObjectsApi) -> None:
                                 )
                                 METRICS['pull_requests_created_total'].labels(namespace=hr_ns, name=hr_name).inc()
                                 METRICS['updates_processed_total'].labels(namespace=hr_ns, name=hr_name, status="success").inc()
+
+                                if auto_merge:
+                                    auto_merge_pull_request(
+                                        github_client, pr_url, hr_ns, hr_name, branch_name
+                                    )
                             else:
                                 logging.error(
                                     "❌ Failed to create PR for %s/%s",

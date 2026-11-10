@@ -100,6 +100,16 @@ spec:
                 - name: GITHUB_ASSIGNEES_BY_HELMRELEASE
                   value: {{ .Values.github.assigneesByHelmRelease | quote }}
                 {{- end }}
+                {{- with .Values.github.autoMerge }}
+                {{- if .helmReleases }}
+                - name: GITHUB_AUTO_MERGE_HELMRELEASES
+                  value: {{ .helmReleases | toJson | quote }}
+                - name: GITHUB_AUTO_MERGE_METHOD
+                  value: {{ .method | default "merge" | quote }}
+                - name: GITHUB_AUTO_MERGE_DELETE_BRANCH
+                  value: {{ .deleteBranch | quote }}
+                {{- end }}
+                {{- end }}
                 {{- if .Values.git.userName }}
                 - name: GIT_USER_NAME
                   value: {{ .Values.git.userName | quote }}
