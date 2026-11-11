@@ -1496,72 +1496,83 @@ def update_helm_release_manifest(
         return False
 
 
+_YAML_DOC_SEPARATOR = re.compile(r"(?m)^(---[ \t]*(?:#.*)?(?:\n|$))")
+
+
+def find_oci_repository_manifest(
+    repo_dir: str, oci_repo_name: str, oci_repo_namespace: str
+) -> Optional[Tuple[Path, List[str], int]]:
+    """Find the YAML document that defines the given OCIRepository.
+
+    Files are identified by their content, not their name: a document only
+    matches if it has kind OCIRepository and the right metadata.name. The file
+    name says nothing reliable (e.g. the OCIRepository may live next to its
+    HelmRelease in "helmrelease-site.yaml", while an unrelated file is called
+    "...-<name>.yaml").
+
+    Returns (path relative to repo_dir, file content split into parts, index of
+    the matching part) so that only that document is modified, or None.
+    A document with the exact namespace wins over one without a namespace
+    (namespace set by Kustomize); a different namespace never matches.
+    """
+    fallback: Optional[Tuple[Path, List[str], int]] = None
+    root = Path(repo_dir)
+    for yaml_file in sorted(root.rglob("*.y*ml")):
+        rel_path = yaml_file.relative_to(root)
+        if ".git" in rel_path.parts or yaml_file.suffix not in (".yaml", ".yml"):
+            continue
+        try:
+            content = yaml_file.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if "OCIRepository" not in content or oci_repo_name not in content:
+            continue
+
+        # Split into documents but keep the separators so the file can be
+        # reassembled byte for byte.
+        parts = _YAML_DOC_SEPARATOR.split(content)
+        for index, part in enumerate(parts):
+            if "OCIRepository" not in part:
+                continue
+            try:
+                doc = yaml.safe_load(part)
+            except yaml.YAMLError:
+                continue
+            if not isinstance(doc, dict) or doc.get("kind") != "OCIRepository":
+                continue
+            metadata = doc.get("metadata") or {}
+            if metadata.get("name") != oci_repo_name:
+                continue
+            namespace = metadata.get("namespace")
+            if namespace == oci_repo_namespace:
+                return rel_path, parts, index
+            if namespace is None and fallback is None:
+                fallback = (rel_path, parts, index)
+    return fallback
+
+
 def update_oci_repository_manifest(
     repo_dir: str, oci_repo_name: str, oci_repo_namespace: str, new_version: str, current_version: str
 ) -> bool:
     """Update the OCIRepository manifest with the new version, preserving original formatting."""
     try:
-        # Find the OCIRepository manifest file
-        # Look in common locations for FluxCD manifests
-        possible_paths = [
-            # Common FluxCD patterns
-            f"clusters/*/helmrepositories/{oci_repo_namespace}/{oci_repo_name}.yaml",
-            f"clusters/*/helmrepositories/helmrepository-{oci_repo_name}.yaml",
-            f"clusters/*/helmrepositories/{oci_repo_name}.yaml",
-            f"helmrepositories/{oci_repo_namespace}/{oci_repo_name}.yaml",
-            f"helmrepositories/helmrepository-{oci_repo_name}.yaml",
-            f"helmrepositories/{oci_repo_name}.yaml",
-            # Generic searches
-            f"**/{oci_repo_name}.yaml",
-            f"**/helmrepository-{oci_repo_name}.yaml",
-            f"**/*{oci_repo_name}*.yaml",
-        ]
-
         logging.info("Searching for OCIRepository manifest %s/%s in repo: %s", oci_repo_namespace, oci_repo_name, repo_dir)
 
-        manifest_path = None
-        for path_pattern in possible_paths:
-            try:
-                logging.debug("Trying pattern: %s", path_pattern)
-                matches = list(Path(repo_dir).glob(path_pattern))
-                if matches:
-                    manifest_path = matches[0].relative_to(repo_dir)
-                    logging.info("✅ Found OCIRepository manifest: %s", manifest_path)
-                    break
-            except Exception as e:
-                logging.debug("Error with pattern %s: %s", path_pattern, e)
-                continue
-
-        if not manifest_path:
-            # Fallback: search for YAML files containing the OCIRepository by content
-            logging.info("🔍 Fallback search: looking for YAML files containing OCIRepository %s/%s", oci_repo_namespace, oci_repo_name)
-            try:
-                for yaml_file in Path(repo_dir).rglob("*.yaml"):
-                    try:
-                        with open(yaml_file, 'r', encoding='utf-8') as f:
-                            content = f.read()
-                            if f'kind: OCIRepository' in content and f'name: {oci_repo_name}' in content:
-                                # Check if namespace matches (if specified in the file)
-                                if f'namespace: {oci_repo_namespace}' in content or oci_repo_namespace in str(yaml_file):
-                                    manifest_path = yaml_file.relative_to(repo_dir)
-                                    logging.info("✅ Found OCIRepository manifest by content search: %s", manifest_path)
-                                    break
-                    except Exception:
-                        continue
-            except Exception as e:
-                logging.debug("Content search failed: %s", e)
-
-        if not manifest_path:
-            logging.error("❌ Could not find OCIRepository manifest for %s/%s. Searched patterns: %s",
-                         oci_repo_namespace, oci_repo_name, possible_paths)
+        found = find_oci_repository_manifest(repo_dir, oci_repo_name, oci_repo_namespace)
+        if not found:
+            logging.error("❌ Could not find a manifest defining OCIRepository %s/%s",
+                         oci_repo_namespace, oci_repo_name)
             return False
+
+        manifest_path, parts, doc_index = found
+        logging.info("✅ Found OCIRepository manifest: %s", manifest_path)
 
         full_path = Path(repo_dir) / manifest_path
         logging.info("Updating OCIRepository manifest: %s", full_path)
 
-        # Read the manifest file as text to preserve formatting
-        with open(full_path, "r", encoding="utf-8") as f:
-            content = f.read()
+        # Only the OCIRepository document is touched; other documents in the
+        # same file (e.g. the HelmRelease) may contain unrelated "tag:" fields.
+        content = parts[doc_index]
 
         # Check if the file already contains the target version
         import re
@@ -1642,8 +1653,9 @@ def update_oci_repository_manifest(
             return False
 
         # Write back the content preserving original formatting
+        parts[doc_index] = content
         with open(full_path, "w", encoding="utf-8") as f:
-            f.write(content)
+            f.write("".join(parts))
 
         logging.info("✅ Successfully updated OCIRepository with tag %s", new_version)
         return True
